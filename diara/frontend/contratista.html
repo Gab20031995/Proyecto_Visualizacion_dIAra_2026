@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<!--
+  Empresa ejecutora (ruta /contratista, solo rol contratista). Una sola página con dos modos:
+    sin ?p=   Home: tarjetas de los proyectos asignados con el estado de lo que la empresa ha cargado
+    ?p=ID     Carga de información del proyecto, con scroll por secciones:
+                Obra         datos generales y resumen de lo cargado
+                Cronograma   carga de versiones (CSV/Excel), curva S planificada, actividades e historial de versiones
+                Bitácora     entrada diaria (corregible 48 h) y entradas anteriores
+                Costos       presupuesto por partidas (CSV/Excel), registro de costos y anulación con motivo
+  API: /api/contratista/... (backend/routes/contratista.py; reglas en backend/src/contratista.py).
+  La empresa NO ve el análisis de la IA ni las alertas: lo que carga lo cruza el auditor en su panel (proyecto.html).
+  Estilos: base.css + panel.css + el bloque style de abajo. Lógica: el bloque script al final de la página.
+-->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>dIAra · Empresa ejecutora</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%230b5cab%22/%3E%3Ctext x=%2216%22 y=%2222%22 font-size=%2215%22 font-family=%22sans-serif%22 font-weight=%22700%22 fill=%22white%22 text-anchor=%22middle%22%3EIA%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/css/base.css">
+<link rel="stylesheet" href="assets/css/panel.css">
+<style>
+/* ---------- Empresa ejecutora ---------- */
+.saludo{margin:20px 0 14px}.saludo h1{font-size:24px;margin:0}
+.lista-p{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
+.tp{display:flex;flex-direction:column;gap:10px;color:var(--tx);text-decoration:none;transition:box-shadow .15s,transform .15s}
+.tp:hover{box-shadow:0 6px 20px #0002;transform:translateY(-1px)}
+.tp h2{font-size:17px;margin:0}.tp .badge{white-space:nowrap}
+.tp .entrar{margin-top:auto;display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--bd);padding-top:10px}
+.tp .entrar b{color:var(--pr)}
+.datos{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:14px;margin:0}
+.datos dt{color:var(--mu)}.datos dd{margin:0;font-variant-numeric:tabular-nums}
+.pend{color:var(--al);font-weight:600}
+.barra{display:grid;grid-template-columns:1fr 140px 52px;gap:8px;align-items:center;font-size:13px}
+.barra .t{height:8px;border-radius:99px;background:var(--bd);overflow:hidden}.barra .t i{display:block;height:100%}
+.barra b{text-align:right;font-variant-numeric:tabular-nums}
+.ayuda{background:var(--bg);border:1px solid var(--bd);border-radius:10px;padding:8px 12px;font-size:13px;margin:8px 0 0}
+.entrada{border-top:1px solid var(--bd);padding:10px 0}.entrada:first-child{border-top:0;padding-top:0}
+.entrada p{margin:4px 0}
+.solo-lectura{border-color:#e0a10080;background:#e0a1000d}
+tr.anulado td{color:var(--mu);text-decoration:line-through}tr.anulado td:last-child{text-decoration:none}
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="/contratista">d<span>IA</span>ra</a>
+  <a class="btn sm hide" id="volver" href="/contratista">← Mis proyectos</a>
+  <span class="chip" id="chip">Empresa ejecutora</span>
+  <span id="obra-sel"></span>
+  <span class="grow"></span>
+  <span class="usuario" id="usuario"></span>
+  <button class="sm" id="salir">Salir</button>
+</header>
+<div class="subnav hide" role="navigation" aria-label="Secciones"><div class="in">
+  <a href="#obra">Obra</a><a href="#cronograma">Cronograma</a><a href="#bitacora">Bitácora de obra</a><a href="#costos">Costos y presupuesto</a>
+</div></div>
+
+<main>
+  <!-- ===== Modo Home (sin ?p=) ===== -->
+  <div id="home" class="hide">
+    <div class="saludo"><h1 id="hola">Hola 👋</h1><p class="mu" id="sub" style="margin:4px 0 0">Cargando sus proyectos…</p></div>
+    <div class="kpis" id="h-kpis"></div>
+    <div class="tit sec" style="margin:22px 0 10px"><h2 style="margin:0;font-size:20px">Proyectos asignados</h2></div>
+    <div class="lista-p" id="h-lista"></div>
+    <p style="height:24px"></p>
+  </div>
+
+  <!-- ===== Modo proyecto (?p=ID) ===== -->
+  <div id="panel" class="hide">
+    <section class="bloque" id="obra">
+      <div class="tit"><div><h2 id="o-nombre"></h2><p class="mu" id="o-meta"></p></div></div>
+      <div class="card solo-lectura hide" id="o-lectura"></div>
+      <div class="kpis sec" id="o-kpis"></div>
+      <div class="grid g2 sec">
+        <div class="card"><h3>Datos de la obra</h3><dl class="datos" id="o-datos"></dl></div>
+        <div class="card"><h3>¿Para qué se usa esta información?</h3>
+          <p style="margin-top:0">El cronograma, la bitácora y los costos que registre forman parte del expediente de fiscalización de la obra.
+            La Contraloría los compara con lo que registra la cámara y con el clima real del sitio.</p>
+          <p class="mu" style="margin:0">Lo registrado no se elimina: una entrada de bitácora se puede corregir durante 48 h, un costo se anula indicando el motivo
+            y el cronograma se actualiza cargando una versión nueva. Todo cambio queda registrado con su autor y fecha.</p></div>
+      </div>
+    </section>
+
+    <section class="bloque" id="cronograma">
+      <div class="tit"><div><h2>Cronograma</h2><p class="mu">Actividades con fechas y peso. Cada carga crea una versión nueva; la vigente es la última.</p></div></div>
+      <div class="grid g2">
+        <form class="card" id="f-crono" novalidate>
+          <h3>Cargar versión del cronograma</h3>
+          <label for="c-archivo">Archivo (CSV o Excel .xlsx, máx. 2 MB)</label><input id="c-archivo" type="file" accept=".csv,.xlsx">
+          <div class="fila"><div class="c"><label for="c-version">Versión</label><input id="c-version" maxlength="40" placeholder="Ej.: v2 (orden de cambio 3)"></div></div>
+          <label for="c-notas">Notas (motivo de la actualización)</label><input id="c-notas" maxlength="500">
+          <div class="ayuda">Columnas: <code>codigo</code> (opcional), <code>actividad</code>, <code>inicio</code>, <code>fin</code> (AAAA-MM-DD) y <code>peso</code> (% de la obra;
+            si no suman 100 se ajustan en proporción). <a class="link" href="/api/contratista/plantilla/cronograma.csv">Descargar plantilla</a></div>
+          <p class="err" id="c-err"></p>
+          <p style="margin:8px 0 0"><button class="pri" type="submit">Cargar cronograma</button></p>
+        </form>
+        <div class="card"><h3>Curva planificada <span class="mu" id="c-vig"></span></h3><div id="c-curva"></div></div>
+      </div>
+      <div class="tabla sec"><table id="c-acts"></table></div>
+      <details class="sec"><summary style="cursor:pointer;font-weight:600">Historial de versiones <span class="mu" id="c-nver"></span></summary><div class="tabla" style="margin-top:8px"><table id="c-vers"></table></div></details>
+    </section>
+
+    <section class="bloque" id="bitacora">
+      <div class="tit"><div><h2>Bitácora de obra</h2><p class="mu">Una entrada por día. Se puede corregir durante 48 h después de registrarla.</p></div></div>
+      <div class="grid g2">
+        <form class="card" id="f-bit" novalidate>
+          <h3 id="b-titulo">Registrar el día</h3>
+          <div class="fila">
+            <div class="c"><label for="b-fecha">Fecha</label><input id="b-fecha" type="date"></div>
+            <div class="c"><label for="b-clima">Clima</label><select id="b-clima"></select></div>
+          </div>
+          <div class="fila">
+            <div class="c"><label for="b-personal">Personal en sitio</label><input id="b-personal" type="number" min="0" step="1" inputmode="numeric"></div>
+            <div class="c"><label for="b-horas">Horas trabajadas</label><input id="b-horas" type="number" min="0" max="24" step="0.5" inputmode="decimal"></div>
+          </div>
+          <label for="b-maq">Maquinaria y equipo en sitio</label><input id="b-maq" maxlength="300" placeholder="Ej.: excavadora, vagoneta, mezcladora">
+          <label class="check" style="border:0;padding:6px 0 0"><input type="checkbox" id="b-operando"> La maquinaria estuvo operando durante el día</label>
+          <label for="b-act">Actividades realizadas</label><textarea id="b-act" maxlength="3000" style="min-height:80px" placeholder="Describa los trabajos del día y su ubicación en la obra"></textarea>
+          <div class="fila">
+            <div class="c"><label for="b-avance">Avance acumulado de la obra (%)</label><input id="b-avance" type="number" min="0" max="100" step="0.1" inputmode="decimal"></div>
+          </div>
+          <label for="b-inc">Incidentes, atrasos u observaciones (opcional)</label><textarea id="b-inc" maxlength="2000" style="min-height:60px"></textarea>
+          <p class="err" id="b-err"></p>
+          <p style="margin:8px 0 0"><button class="pri" type="submit" id="b-guardar">Guardar entrada</button> <button type="button" class="hide" id="b-cancelar">Cancelar corrección</button></p>
+        </form>
+        <div class="card"><h3>Entradas registradas <span class="mu" id="b-n"></span></h3><div id="b-lista" style="max-height:640px;overflow:auto"></div></div>
+      </div>
+    </section>
+
+    <section class="bloque" id="costos" style="padding-bottom:40px">
+      <div class="tit"><div><h2>Costos y presupuesto</h2><p class="mu">Presupuesto por partidas y costos ejecutados (gastos y estimaciones de pago).</p></div></div>
+      <div class="kpis" id="k-kpis"></div>
+      <div class="card sec"><h3>Ejecución por partida</h3><div id="k-partidas"></div></div>
+      <div class="grid g2 sec">
+        <form class="card" id="f-costo" novalidate>
+          <h3>Registrar costo</h3>
+          <div class="fila">
+            <div class="c"><label for="k-fecha">Fecha</label><input id="k-fecha" type="date"></div>
+            <div class="c"><label for="k-tipo">Tipo</label><select id="k-tipo"></select></div>
+          </div>
+          <label for="k-partida">Partida</label><select id="k-partida"></select>
+          <div class="fila">
+            <div class="c"><label for="k-monto">Monto (₡)</label><input id="k-monto" type="number" min="0" step="any" inputmode="decimal"></div>
+            <div class="c"><label for="k-doc">N.º de factura o estimación</label><input id="k-doc" maxlength="60"></div>
+          </div>
+          <label for="k-desc">Descripción</label><input id="k-desc" maxlength="500">
+          <p class="err" id="k-err"></p>
+          <p style="margin:8px 0 0"><button class="pri" type="submit">Registrar costo</button></p>
+        </form>
+        <form class="card" id="f-pres" novalidate>
+          <h3>Cargar presupuesto por partidas</h3>
+          <label for="p-archivo">Archivo (CSV o Excel .xlsx, máx. 2 MB)</label><input id="p-archivo" type="file" accept=".csv,.xlsx">
+          <div class="ayuda">Columnas: <code>codigo</code>, <code>partida</code> y <code>monto</code> (₡). Si un código ya existe se actualiza; las partidas que no vengan en el archivo se conservan.
+            <a class="link" href="/api/contratista/plantilla/presupuesto.csv">Descargar plantilla</a></div>
+          <p class="err" id="p-err"></p>
+          <p style="margin:8px 0 0"><button class="pri" type="submit">Cargar presupuesto</button></p>
+        </form>
+      </div>
+      <h3 class="sec">Costos registrados</h3>
+      <div class="tabla"><table id="k-lista"></table></div>
+    </section>
+  </div>
+</main>
+
+<div class="modal" id="modal"><div class="card" id="mbody"></div></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="assets/js/common.js"></script>
+<script src="assets/js/panel.js"></script>
+<script>
+/* ================= Empresa ejecutora ================= */
+/* Estado: pid (proyecto abierto), obra (/{pid}), cat (catálogos), bit (entradas de bitácora), costos (/{pid}/costos),
+   crono (/{pid}/cronograma). Patrón: pintarX() genera HTML desde S (escapando con esc()); cargarX() pide a la API y pinta. */
+var S = { pid: null, obra: null, cat: null, bit: [], costos: null, crono: null };
+var C = function (r) { return "/api/contratista/" + encodeURIComponent(S.pid) + r };
+/* Fecha de hoy en Costa Rica (AAAA-MM-DD), sin depender de la zona horaria del equipo */
+function hoyCR() { return new Date().toLocaleDateString("en-CA", { timeZone: "America/Costa_Rica" }) }
+function colones(v) { return v == null ? "—" : "₡" + Math.round(v).toLocaleString("es-CR") }
+function pct(v) { return v == null ? "—" : v + "%" }
+function opciones(lista, actual) { return lista.map(function (o) { return "<option" + (o === actual ? " selected" : "") + ">" + esc(o) + "</option>" }).join("") }
+var CLASE_ESTADO = { "Planificado": "b-b", "En ejecución": "b-g", "Suspendido": "b-o", "Finalizado": "b-n", "Cancelado": "b-r" };
+function badgeObra(e) { return '<span class="badge ' + (CLASE_ESTADO[e] || "b-n") + '">' + esc(e) + "</span>" }
+/* Días entre una fecha y hoy (texto "hoy", "ayer", "hace N días") */
+function hace(f) {
+  var d = Math.round((new Date(hoyCR() + "T12:00") - new Date(f + "T12:00")) / 864e5);
+  return d <= 0 ? "hoy" : d === 1 ? "ayer" : "hace " + d + " días";
+}
+
+/* ---------- HOME ---------- */
+function pintarHome(P, yo) {
+  $("#hola").textContent = "Hola, " + (yo.nombre || yo.correo).replace(/^(Ing\.|Arq\.)\s*/, "").split(" ")[0] + " 👋";
+  $("#sub").textContent = (yo.empresa ? yo.empresa + " · " : "") + (P.length ? "Elija un proyecto para cargar el cronograma, la bitácora y los costos." : "");
+  if (!P.length) {
+    $("#h-lista").innerHTML = '<div class="card" style="grid-column:1/-1;text-align:center;padding:40px"><h2>Aún no tiene proyectos asignados</h2><p class="mu">La Contraloría le asignará las obras en las que su empresa debe reportar información.</p></div>';
+    return;
+  }
+  var hoy = hoyCR(), sinHoy = P.filter(function (p) { return p.editable && p.ultima_bitacora !== hoy }).length;
+  $("#h-kpis").innerHTML = kpi("Proyectos asignados", P.length) + kpi("Sin bitácora de hoy", sinHoy, sinHoy ? "mal" : "bien") +
+    kpi("Sin cronograma", P.filter(function (p) { return !p.cronograma }).length) + kpi("Sin presupuesto", P.filter(function (p) { return !p.presupuesto }).length);
+  $("#h-lista").innerHTML = P.map(function (p) {
+    var falta = function (t) { return '<span class="pend">' + t + "</span>" };
+    return '<a class="card tp" href="/contratista?p=' + encodeURIComponent(p.id) + '"><div style="display:flex;justify-content:space-between;gap:8px"><div><h2>' + esc(p.nombre) + '</h2><div class="mu">' +
+      esc(p.ubicacion) + " · " + esc(p.institucion) + "</div></div><div>" + badgeObra(p.estado_obra) + "</div></div>" +
+      '<dl class="datos"><dt>Cronograma</dt><dd>' + (p.cronograma ? esc(p.cronograma) + ' <span class="mu">· ' + pct(p.planificado_hoy) + " planificado a hoy</span>" : falta("Sin cargar")) + "</dd>" +
+      "<dt>Última bitácora</dt><dd>" + (p.ultima_bitacora ? fmtFecha(p.ultima_bitacora) + ' <span class="' + (p.dias_sin_bitacora > 1 && p.editable ? "pend" : "mu") + '">(' + hace(p.ultima_bitacora) + ")</span>" : falta("Sin entradas")) + "</dd>" +
+      "<dt>Avance reportado</dt><dd>" + pct(p.avance_reportado) + "</dd>" +
+      "<dt>Presupuesto ejecutado</dt><dd>" + (p.presupuesto ? pct(p.pct_ejecutado) + ' <span class="mu">de ' + colones(p.presupuesto) + "</span>" : falta("Sin presupuesto")) + "</dd></dl>" +
+      '<div class="entrar"><span class="mu">' + esc(p.id) + (p.editable ? "" : " · solo lectura") + "</span><b>" + (p.editable ? "Cargar información →" : "Ver información →") + "</b></div></a>"
+  }).join("");
+}
+
+/* ---------- OBRA ---------- */
+function pintarObra() {
+  var o = S.obra, k = S.costos, b = S.bit[0];
+  $("#o-nombre").textContent = o.nombre;
+  $("#o-meta").innerHTML = esc(o.ubicacion) + " · " + esc(o.institucion) + " · " + badgeObra(o.estado);
+  if (!o.editable) { $("#o-lectura").innerHTML = "<b>Obra " + esc(o.estado.toLowerCase()) + ":</b> la información queda de solo lectura."; $("#o-lectura").classList.remove("hide") }
+  $$("#f-crono button, #f-bit button, #f-costo button, #f-pres button").forEach(function (x) { x.disabled = !o.editable });
+  $("#o-kpis").innerHTML = kpi("Planificado a hoy (cronograma)", pct(S.crono.planificado_hoy)) +
+    kpi("Último avance reportado", b && b.avance_reportado != null ? b.avance_reportado + "%" : "—", "", b ? "Bitácora del " + fmtFecha(b.fecha) : "") +
+    kpi("Presupuesto ejecutado", pct(k.pct_ejecutado)) +
+    kpi("Última bitácora", b ? hace(b.fecha) : "Sin entradas", b && b.fecha === hoyCR() ? "bien" : o.editable ? "mal" : "");
+  var filas = [["Institución", o.institucion], ["Empresa (contrato)", o.contratista], ["N.º de contratación", o.contratacion], ["Monto del contrato", o.monto_crc ? colones(o.monto_crc) : null],
+    ["Inicio", o.fecha_inicio ? fmtFecha(o.fecha_inicio) : null], ["Fin previsto", o.fecha_fin ? fmtFecha(o.fecha_fin) : null], ["Dirección", o.direccion], ["Descripción", o.descripcion]];
+  $("#o-datos").innerHTML = filas.map(function (f) { return "<dt>" + f[0] + "</dt><dd>" + (f[1] ? esc(f[1]) : '<span class="mu">—</span>') + "</dd>" }).join("");
+}
+
+/* ---------- CRONOGRAMA ---------- */
+/* Curva S: % planificado acumulado en el tiempo, con una línea vertical en el día de hoy */
+function curvaS(c) {
+  var n = c.length, t0 = new Date(c[0].f + "T12:00").getTime(), t1 = new Date(c[n - 1].f + "T12:00").getTime();
+  var X = function (f) { return 40 + 420 * (new Date(f + "T12:00").getTime() - t0) / Math.max(t1 - t0, 1) }, Y = function (v) { return 180 - 1.6 * v };
+  var pts = c.map(function (r) { return X(r.f).toFixed(1) + "," + Y(r.v).toFixed(1) }).join(" "), hoy = hoyCR();
+  var marca = hoy >= c[0].f && hoy <= c[n - 1].f ? '<line x1="' + X(hoy) + '" y1="20" x2="' + X(hoy) + '" y2="180" stroke="var(--al)" stroke-dasharray="4 3"/><text x="' + (X(hoy) + 4) + '" y="32" font-size="11" fill="var(--al)">hoy</text>' : "";
+  return '<svg class="chart" viewBox="0 0 480 220" role="img" aria-label="Curva de avance planificado del cronograma">' +
+    '<g stroke="var(--bd)"><line x1="40" y1="20" x2="40" y2="180"/><line x1="40" y1="180" x2="470" y2="180"/><line x1="40" y1="100" x2="470" y2="100" stroke-dasharray="3 4"/></g>' +
+    '<g font-size="10" fill="var(--mu)" font-family="sans-serif"><text x="8" y="24">100%</text><text x="14" y="104">50%</text><text x="22" y="184">0%</text>' +
+    '<text x="40" y="200">' + fmtFecha(c[0].f) + '</text><text x="400" y="200">' + fmtFecha(c[n - 1].f) + "</text></g>" +
+    '<polyline fill="none" stroke="var(--pr)" stroke-width="3" points="' + pts + '"/>' + marca + "</svg>";
+}
+function pintarCrono() {
+  var c = S.crono;
+  $("#c-vig").textContent = c.vigente ? "· " + c.vigente.version : "";
+  $("#c-curva").innerHTML = c.curva.length ? curvaS(c.curva) + '<p class="mu" style="margin:6px 0 0">Planificado a hoy: <b>' + pct(c.planificado_hoy) + "</b></p>" : '<p class="vacio-msg">Aún no ha cargado el cronograma de la obra.</p>';
+  $("#c-acts").innerHTML = c.actividades.length ? "<thead><tr><th>Código</th><th>Actividad</th><th>Inicio</th><th>Fin</th><th class='num'>Días</th><th class='num'>Peso</th></tr></thead><tbody>" +
+    c.actividades.map(function (a) {
+      var dias = Math.round((new Date(a.fin + "T12:00") - new Date(a.inicio + "T12:00")) / 864e5) + 1;
+      return "<tr><td>" + esc(a.codigo || "") + "</td><td>" + esc(a.actividad) + "</td><td>" + fmtFecha(a.inicio) + "</td><td>" + fmtFecha(a.fin) + '</td><td class="num">' + dias + '</td><td class="num">' + (Math.round(a.peso * 10) / 10) + "%</td></tr>"
+    }).join("") + "</tbody>" : "";
+  $("#c-nver").textContent = "(" + c.versiones.length + ")";
+  $("#c-vers").innerHTML = c.versiones.length ? "<thead><tr><th>Versión</th><th>Cargada (UTC)</th><th>Por</th><th class='num'>Actividades</th><th>Archivo</th><th>Notas</th></tr></thead><tbody>" +
+    c.versiones.map(function (v, i) { return "<tr><td><b>" + esc(v.version) + "</b>" + (i === 0 ? ' <span class="badge b-g">Vigente</span>' : "") + "</td><td>" + esc(String(v.creado).slice(0, 16)) + "</td><td>" + esc(v.autor) + '</td><td class="num">' + v.actividades + "</td><td>" + esc(v.archivo || "") + "</td><td>" + esc(v.notas || "") + "</td></tr>" }).join("") + "</tbody>"
+    : '<tbody><tr><td class="vacio-msg">Sin versiones cargadas.</td></tr></tbody>';
+}
+function cargarCrono() { return api(C("/cronograma")).then(function (c) { S.crono = c; pintarCrono() }) }
+$("#f-crono").onsubmit = function (e) {
+  e.preventDefault(); $("#c-err").textContent = "";
+  var f = $("#c-archivo").files[0]; if (!f) { $("#c-err").textContent = "Seleccione el archivo del cronograma"; return }
+  var fd = new FormData(); fd.append("archivo", f); fd.append("version", $("#c-version").value); fd.append("notas", $("#c-notas").value);
+  api(C("/cronograma"), { method: "POST", body: fd }).then(function (r) {
+    toast("✅ Cronograma " + r.version + " cargado: " + r.actividades + " actividades" + (r.pesos_normalizados ? " (pesos ajustados a 100 %)" : ""));
+    $("#f-crono").reset(); return recargar();
+  }).catch(function (x) { $("#c-err").textContent = x.message });
+};
+
+/* ---------- BITÁCORA ---------- */
+/* Llena el formulario: vacío para el día de hoy, o con una entrada existente para corregirla (dentro de las 48 h) */
+function formBitacora(b) {
+  $("#b-titulo").textContent = b ? "Corregir entrada del " + fmtFecha(b.fecha) : "Registrar el día";
+  $("#b-fecha").value = b ? b.fecha : hoyCR(); $("#b-fecha").disabled = !!b; $("#b-fecha").max = hoyCR();
+  $("#b-clima").innerHTML = '<option value="">— Seleccione —</option>' + opciones(S.cat.climas, b ? b.clima : "");
+  $("#b-personal").value = b ? b.personal : ""; $("#b-horas").value = b && b.horas_trabajo != null ? b.horas_trabajo : "";
+  $("#b-maq").value = b ? b.maquinaria || "" : ""; $("#b-operando").checked = !!(b && b.maquinaria_operando);
+  $("#b-act").value = b ? b.actividades || "" : ""; $("#b-avance").value = b && b.avance_reportado != null ? b.avance_reportado : "";
+  $("#b-inc").value = b ? b.incidentes || "" : "";
+  $("#b-guardar").textContent = b ? "Guardar corrección" : "Guardar entrada"; $("#b-cancelar").classList.toggle("hide", !b);
+  $("#b-err").textContent = "";
+}
+$("#b-cancelar").onclick = function () { formBitacora(null) };
+function pintarBitacora() {
+  var B = S.bit;
+  $("#b-n").textContent = "(" + B.length + ")";
+  $("#b-lista").innerHTML = B.length ? B.map(function (b) {
+    return '<div class="entrada"><div class="fila" style="justify-content:space-between"><b>' + diaSemana(b.fecha) + " " + fmtFecha(b.fecha) + "</b>" +
+      (b.editable && S.obra.editable ? '<button class="sm" data-corregir="' + esc(b.fecha) + '">✏️ Corregir</button>' : "") + "</div>" +
+      '<div class="chips" style="margin:4px 0"><span class="badge ' + (b.clima.indexOf("fuerte") >= 0 ? "b-b" : "b-n") + '">' + esc(b.clima) + '</span><span class="badge b-n">👷 ' + b.personal + "</span>" +
+      '<span class="badge ' + (b.maquinaria_operando ? "b-g" : "b-n") + '">🚜 ' + (b.maquinaria_operando ? "Operando" : "Sin operar") + "</span>" +
+      (b.avance_reportado != null ? '<span class="badge b-b">Avance ' + b.avance_reportado + "%</span>" : "") + "</div>" +
+      "<p>" + esc(b.actividades) + "</p>" + (b.maquinaria ? '<p class="mu">Equipo: ' + esc(b.maquinaria) + "</p>" : "") +
+      (b.incidentes ? '<p class="mu">Incidentes: ' + esc(b.incidentes) + "</p>" : "") +
+      '<p class="mu" style="font-size:12px">Registrada ' + esc(String(b.creado).slice(0, 16)) + " UTC" + (b.dias_atraso > 1 ? " · " + b.dias_atraso + " días después de la fecha" : "") +
+      (b.actualizado ? " · corregida " + esc(String(b.actualizado).slice(0, 16)) : "") + "</p></div>"
+  }).join("") : '<p class="vacio-msg">Aún no hay entradas en la bitácora.</p>';
+  $$("[data-corregir]").forEach(function (x) {
+    x.onclick = function () { formBitacora(S.bit.filter(function (b) { return b.fecha === x.dataset.corregir })[0]); $("#f-bit").scrollIntoView({ behavior: "smooth" }) }
+  });
+}
+function cargarBitacora() { return api(C("/bitacora")).then(function (l) { S.bit = l; pintarBitacora() }) }
+$("#f-bit").onsubmit = function (e) {
+  e.preventDefault();
+  var datos = { fecha: $("#b-fecha").value, clima: $("#b-clima").value, personal: $("#b-personal").value, horas_trabajo: $("#b-horas").value,
+    maquinaria: $("#b-maq").value, maquinaria_operando: $("#b-operando").checked, actividades: $("#b-act").value,
+    avance_reportado: $("#b-avance").value, incidentes: $("#b-inc").value };
+  api(C("/bitacora"), { json: datos }).then(function (r) {
+    toast(r.corregida ? "✅ Entrada corregida (el cambio queda registrado)" : "✅ Entrada del " + fmtFecha(datos.fecha) + " guardada");
+    formBitacora(null); return recargar();
+  }).catch(function (x) { $("#b-err").textContent = x.message });
+};
+
+/* ---------- COSTOS Y PRESUPUESTO ---------- */
+function pintarCostos() {
+  var k = S.costos;
+  $("#k-kpis").innerHTML = kpi("Presupuesto (partidas)", colones(k.presupuesto), "", k.monto_contrato ? "Monto del contrato: " + colones(k.monto_contrato) : "") +
+    kpi("Ejecutado", colones(k.ejecutado)) + kpi("% ejecutado", pct(k.pct_ejecutado)) + kpi("Saldo", colones(k.saldo), k.saldo != null && k.saldo < 0 ? "mal" : "");
+  $("#k-partidas").innerHTML = k.partidas.length ? k.partidas.map(function (p) {
+    var v = p.pct || 0;
+    return '<div class="barra"><span><b style="text-align:left">' + esc(p.codigo) + "</b> " + esc(p.partida) + ' <span class="mu">· ' + colones(p.ejecutado) + " de " + colones(p.monto) + '</span></span><span class="t"><i style="width:' + Math.min(100, v) +
+      "%;background:" + (v > 100 ? "var(--al)" : "var(--pr)") + '"></i></span><b>' + pct(p.pct) + "</b></div>"
+  }).join("") : '<p class="vacio-msg">Cargue el presupuesto por partidas para poder registrar costos.</p>';
+  $("#k-partida").innerHTML = '<option value="">— Seleccione —</option>' + k.partidas.map(function (p) { return '<option value="' + esc(p.codigo) + '">' + esc(p.codigo + " · " + p.partida) + "</option>" }).join("");
+  $("#k-lista").innerHTML = k.costos.length ? "<thead><tr><th>Fecha</th><th>Partida</th><th>Tipo</th><th>Descripción</th><th>Documento</th><th class='num'>Monto</th><th></th></tr></thead><tbody>" +
+    k.costos.map(function (c) {
+      var an = c.estado === "Anulado";
+      return '<tr class="' + (an ? "anulado" : "") + '"><td>' + fmtFecha(c.fecha) + "</td><td>" + esc(c.partida) + "</td><td>" + esc(c.tipo) + "</td><td>" + esc(c.descripcion) + "</td><td>" + esc(c.documento || "") +
+        '</td><td class="num">' + colones(c.monto) + '</td><td class="num">' + (an ? '<span class="badge b-n" title="' + esc(c.motivo_anulacion) + '">Anulado</span>' : S.obra.editable ? '<button class="sm" data-anular="' + c.id + '">Anular</button>' : "") + "</td></tr>"
+    }).join("") + "</tbody>" : '<tbody><tr><td class="vacio-msg">Aún no hay costos registrados.</td></tr></tbody>';
+  $$("[data-anular]").forEach(function (b) { b.onclick = function () { modalAnular(+b.dataset.anular) } });
+}
+function cargarCostos() { return api(C("/costos")).then(function (k) { S.costos = k; pintarCostos() }) }
+/* Anular (no borrar): el costo queda tachado con su motivo */
+function modalAnular(id) {
+  var c = S.costos.costos.filter(function (x) { return x.id === id })[0];
+  abrirModal("<h2>Anular costo</h2><p class='mu' style='margin-top:0'>" + fmtFecha(c.fecha) + " · " + esc(c.descripcion) + " · " + colones(c.monto) + "</p>" +
+    "<p>El registro no se elimina: queda marcado como anulado, con el motivo, y deja de contar en lo ejecutado.</p>" +
+    '<label for="m-motivo">Motivo</label><textarea id="m-motivo" maxlength="500" style="min-height:70px"></textarea>' +
+    '<p class="err" id="m-err"></p><p style="margin:10px 0 0"><button class="pri" id="m-ok">Anular costo</button> <button data-cerrar>Volver</button></p>', true);
+  $("#m-motivo").focus();
+  $("#m-ok").onclick = function () {
+    api(C("/costos/" + id + "/anular"), { json: { motivo: $("#m-motivo").value } }).then(function () { cerrarModal(); toast("Costo anulado"); return recargar() })
+      .catch(function (x) { $("#m-err").textContent = x.message });
+  };
+}
+$("#f-costo").onsubmit = function (e) {
+  e.preventDefault();
+  var datos = { fecha: $("#k-fecha").value, partida: $("#k-partida").value, tipo: $("#k-tipo").value, monto: $("#k-monto").value, documento: $("#k-doc").value, descripcion: $("#k-desc").value };
+  api(C("/costos"), { json: datos }).then(function () {
+    toast("✅ Costo registrado"); ["#k-monto", "#k-doc", "#k-desc"].forEach(function (s) { $(s).value = "" }); $("#k-err").textContent = ""; return recargar();
+  }).catch(function (x) { $("#k-err").textContent = x.message });
+};
+$("#f-pres").onsubmit = function (e) {
+  e.preventDefault(); $("#p-err").textContent = "";
+  var f = $("#p-archivo").files[0]; if (!f) { $("#p-err").textContent = "Seleccione el archivo del presupuesto"; return }
+  var fd = new FormData(); fd.append("archivo", f);
+  api(C("/presupuesto"), { method: "POST", body: fd }).then(function (r) { toast("✅ Presupuesto cargado: " + r.partidas + " partidas, total " + colones(r.total)); $("#f-pres").reset(); return recargar() })
+    .catch(function (x) { $("#p-err").textContent = x.message });
+};
+
+/* ---------- carga ---------- */
+/* Recarga cronograma, bitácora y costos (después de cada cambio) y repinta el resumen de la obra */
+function recargar() { return Promise.all([cargarCrono(), cargarBitacora(), cargarCostos()]).then(pintarObra) }
+
+/* Arranque: sin ?p= muestra el Home; con ?p= valida que el proyecto esté asignado (si no, vuelve al Home) */
+api("/api/yo").then(function (yo) {
+  $("#usuario").textContent = yo.nombre || yo.correo; $("#usuario").title = yo.correo + (yo.empresa ? " · " + yo.empresa : "");
+  if (yo.empresa) $("#chip").textContent = yo.empresa;
+  var pedido = new URLSearchParams(location.search).get("p");
+  if (new URLSearchParams(location.search).get("sin_acceso")) { toast("No tiene acceso a ese proyecto"); history.replaceState(null, "", "/contratista") }
+  if (!pedido) { $("#home").classList.remove("hide"); return api("/api/contratista/proyectos").then(function (P) { pintarHome(P, yo) }) }
+  var p = yo.proyectos.filter(function (x) { return x.id === pedido })[0];
+  if (!p) { location.replace("/contratista?sin_acceso=1"); return }
+  S.pid = p.id; $("#panel").classList.remove("hide"); $(".subnav").classList.remove("hide"); $("#volver").classList.remove("hide");
+  if (yo.proyectos.length > 1) {
+    $("#obra-sel").innerHTML = '<select id="cambiar" aria-label="Proyecto">' + yo.proyectos.map(function (x) { return '<option value="' + esc(x.id) + '"' + (x.id === p.id ? " selected" : "") + ">" + esc(x.nombre) + "</option>" }).join("") + "</select>";
+    $("#cambiar").onchange = function () { location.href = "/contratista?p=" + encodeURIComponent(this.value) };
+  }
+  document.title = "dIAra · " + p.nombre; medirCabecera();
+  return Promise.all([api(C("")), api("/api/contratista/catalogos")]).then(function (x) {
+    S.obra = x[0]; S.cat = x[1];
+    $("#k-tipo").innerHTML = opciones(S.cat.tipos_costo, S.cat.tipos_costo[0]); $("#k-fecha").value = hoyCR(); $("#k-fecha").max = hoyCR();
+    formBitacora(null);
+    return recargar();
+  }).then(function () { seguirScroll() });
+}).catch(function (e) { if (e.message !== "sesion") toast("Error al cargar: " + e.message) });
+</script>
+</body>
+</html>

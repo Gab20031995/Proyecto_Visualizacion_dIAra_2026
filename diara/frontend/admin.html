@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<!--
+  Administración (ruta /admin, solo rol admin). Una página con scroll y menú por secciones:
+    Resumen      indicadores de todas las obras y "requiere atención"
+    Seguimiento  tabla comparativa de las obras (brecha y su tendencia, alertas, plazo, clima, pendientes), gráfico
+                 de brecha, alertas por tipo, últimos cambios de estado y exportación CSV
+    Proyectos    tarjetas con filtro por estado y búsqueda; crear/editar (ubicación con mapa, token de cámara, prueba
+                 de clima); acciones de estado (iniciar, suspender, reanudar, cerrar, cancelar, reabrir) con motivo
+                 obligatorio e historial; asignar auditores
+    Auditores    crear, editar (nombre, correo, frecuencia), activar/desactivar, contraseña y proyectos de cada persona
+    Contratistas cuentas de la empresa ejecutora (ingeniero de la obra): crear, editar, dar de baja, contraseña y
+                 proyectos en los que carga cronograma, bitácora y costos (página /contratista)
+    Reportes   estado del correo y del envío automático (programador interno), correo de prueba, frecuencia por
+               persona, calendario (días y hora) y plantilla del PDF, vista previa, envíos e historial
+    Clima      fuentes, actualización, precisión del pronóstico, bitácora y exportación CSV
+  API: /api/admin/... (backend/routes/admin.py). Estilos: base.css + panel.css + el bloque style de abajo.
+  Lógica: el bloque script al final. Patrón: pintarX() genera HTML desde S; cargarX() pide a la API y pinta.
+-->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>dIAra · Administración</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%230b5cab%22/%3E%3Ctext x=%2216%22 y=%2222%22 font-size=%2215%22 font-family=%22sans-serif%22 font-weight=%22700%22 fill=%22white%22 text-anchor=%22middle%22%3EIA%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/css/base.css">
+<link rel="stylesheet" href="assets/css/panel.css">
+<style>
+/* ---------- Panel de administración ---------- */
+.proyectos{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
+.proy{display:flex;flex-direction:column;gap:10px}
+.proy.atencion{border-color:#d6454580}
+.proy .cab-p{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+.proy h3{margin:0}
+.barras{display:grid;gap:6px}
+.barra{display:grid;grid-template-columns:78px 1fr 44px;gap:8px;align-items:center;font-size:12px;color:var(--mu)}
+.barra .t{height:8px;border-radius:99px;background:var(--bd);overflow:hidden}.barra .t i{display:block;height:100%}
+.barra b{color:var(--tx);text-align:right;font-variant-numeric:tabular-nums}
+.datos-p{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;text-align:center}
+.datos-p div{background:var(--bg);border-radius:10px;padding:6px 4px}
+.datos-p b{display:block;font-size:16px;font-variant-numeric:tabular-nums}
+.datos-p .mal b{color:var(--al)}
+.proy .pie{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid var(--bd);padding-top:10px;margin-top:auto}
+.sin-aud{color:var(--al);font-size:12px;font-weight:600}
+/* Formulario de proyecto */
+#mbody:has(#f-proy){max-width:880px}
+#f-proy fieldset{border:1px solid var(--bd);border-radius:12px;padding:4px 14px 14px;margin:12px 0 0}
+#f-proy legend{font-weight:700;padding:0 6px}
+#f-proy .g2f{display:grid;gap:0 12px;grid-template-columns:1fr 1fr}
+#f-proy .g3f{display:grid;gap:0 12px;grid-template-columns:1fr 1fr 1fr}
+@media(max-width:640px){#f-proy .g2f,#f-proy .g3f{grid-template-columns:1fr}}
+#f-proy .req::after{content:" *";color:var(--al)}
+.mapa{width:100%;height:240px;border:1px solid var(--bd);border-radius:10px;margin-top:10px;background:var(--bg)}
+.coord-ok{color:var(--ok);font-size:13px}.coord-mal{color:var(--al);font-size:13px}
+.token{font-family:ui-monospace,Consolas,monospace;font-size:13px}
+pre.ej{background:var(--bg);border:1px solid var(--bd);border-radius:10px;padding:10px;font-size:12px;white-space:pre-wrap;word-break:break-all;margin:8px 0 0}
+.estado-u{display:inline-flex;gap:6px;align-items:center;cursor:pointer;margin:0;color:var(--tx);font-size:13px}
+.estado-u input{width:auto}
+/* Estado de la obra: las no activas (Finalizado/Cancelado) se atenúan; Suspendido se marca en naranja */
+.proy.inactiva{opacity:.72}.proy.suspendida{border-color:#e0a10080}
+.acciones{display:flex;gap:6px;flex-wrap:wrap}
+.acciones button.peligro{color:var(--al)}
+.filtros{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.filtros input{max-width:280px}
+.filtros .chip-f{border:1px solid var(--bd);background:var(--card,#fff);border-radius:99px;padding:4px 12px;font-size:13px;cursor:pointer}
+.filtros .chip-f.on{background:var(--pr);border-color:var(--pr);color:#fff}
+/* Aviso cuando la API no responde (p. ej. página abierta sin el servidor o servidor con código viejo) */
+.aviso-error{border-color:#d6454580;background:#d645450d}
+.aviso-error h3{color:var(--al);margin:0 0 6px}
+/* Seguimiento */
+.seg .pos{color:var(--ok)}.seg .neg{color:var(--al)}
+.seg td.num{font-variant-numeric:tabular-nums}
+.hist-item{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;padding:8px 0;border-bottom:1px solid var(--bd);font-size:13px}
+.hist-item:last-child{border-bottom:0}
+svg.brechas text{font-size:11px;fill:var(--mu)}svg.brechas .eje{stroke:var(--bd)}
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="#resumen">d<span>IA</span>ra</a>
+  <span class="chip">Administración</span>
+  <span class="grow"></span>
+  <span class="usuario" id="usuario"></span>
+  <button class="sm" id="salir">Salir</button>
+</header>
+<div class="subnav" role="navigation" aria-label="Secciones"><div class="in">
+  <a href="#resumen">Resumen</a><a href="#seguimiento">Seguimiento</a><a href="#proyectos">Proyectos</a><a href="#auditores">Auditores</a><a href="#contratistas">Contratistas</a><a href="#reportes">Reportes</a><a href="#clima">Clima</a>
+</div></div>
+
+<main>
+  <div class="card aviso-error hide" id="aviso-error" role="alert"></div>
+  <section class="bloque" id="resumen">
+    <div class="tit"><div><h2>Resumen general</h2><p class="mu">Estado de todas las obras monitoreadas y del equipo de auditoría.</p></div></div>
+    <div class="kpis" id="kpis"></div>
+    <div class="card sec" id="atencion"></div>
+  </section>
+
+  <section class="bloque seg" id="seguimiento">
+    <div class="tit"><div><h2>Seguimiento y análisis de las obras</h2><p class="mu">Compare las obras entre sí: avance, tendencia de la brecha, alertas, plazo, clima y pendientes.</p></div>
+      <a class="btn" href="/api/admin/seguimiento.csv">⬇ Exportar CSV</a></div>
+    <div class="kpis" id="seg-kpis"></div>
+    <div class="tabla sec"><table id="seg-tabla"></table></div>
+    <p class="mu" style="margin:6px 0 0">Brecha = avance observado − previsto (pts). Tendencia 7 d = cambio de la brecha frente a 7 registros atrás: ▲ recupera, ▼ se atrasa más.</p>
+    <div class="grid g2 sec">
+      <div class="card"><h3>Brecha por obra</h3><div id="seg-grafico"></div></div>
+      <div class="card"><h3>Alertas activas por tipo</h3><div id="seg-alertas"></div></div>
+    </div>
+    <div class="card sec"><h3>Últimos cambios de estado</h3><div id="seg-historial"></div></div>
+  </section>
+
+  <section class="bloque" id="proyectos">
+    <div class="tit"><div><h2>Proyectos</h2><p class="mu">Cree y edite obras, cambie su estado (suspender, cerrar, cancelar…), asigne auditores y configure su cámara. “Ver proyecto” abre la vista completa del auditor.</p></div>
+      <button class="pri" id="nuevo-p">+ Nuevo proyecto</button></div>
+    <div class="filtros"><input id="p-buscar" type="search" placeholder="Buscar por nombre, institución, ubicación o ID" aria-label="Buscar proyectos"><span id="p-estados" class="chips"></span></div>
+    <div class="proyectos" id="lista-p"></div>
+  </section>
+
+  <section class="bloque" id="auditores">
+    <div class="tit"><div><h2>Auditores</h2><p class="mu">Cree y edite cuentas, defina la frecuencia del reporte por correo, active o desactive el acceso y asigne proyectos.</p></div>
+      <button class="pri" id="nuevo">+ Nuevo auditor</button></div>
+    <div class="tabla"><table id="tabla-u"></table></div>
+  </section>
+
+  <section class="bloque" id="contratistas">
+    <div class="tit"><div><h2>Empresas ejecutoras (contratistas)</h2><p class="mu">Cuentas del ingeniero de cada obra para cargar el cronograma, la bitácora y los costos. Esa información se cruza con lo que observa la IA; la empresa nunca ve el análisis ni las alertas.</p></div>
+      <button class="pri" id="nuevo-c">+ Nuevo contratista</button></div>
+    <div class="tabla"><table id="tabla-c"></table></div>
+  </section>
+
+  <section class="bloque" id="reportes">
+    <div class="tit"><div><h2>Reportes por correo</h2><p class="mu">Cada persona recibe un PDF con el resumen de todos sus proyectos asignados, con la frecuencia que se defina aquí.</p></div>
+      <div class="fila"><button id="rep-prueba">✉ Correo de prueba</button><button class="pri" id="rep-ejecutar">▶ Enviar pendientes ahora</button></div></div>
+    <div class="card" id="rep-config"></div>
+    <form class="card sec" id="f-ajustes" novalidate>
+      <h3>Calendario de envío y plantilla del reporte</h3>
+      <div class="grid g2" style="gap:6px 24px">
+        <div>
+          <label for="aj-dia">Resumen semanal: día de envío</label>
+          <select id="aj-dia"><option value="0">Lunes</option><option value="1">Martes</option><option value="2">Miércoles</option><option value="3">Jueves</option><option value="4">Viernes</option><option value="5">Sábado</option><option value="6">Domingo</option></select>
+          <label>Resumen quincenal: días del mes</label>
+          <div class="fila"><input id="aj-q1" type="number" min="1" max="28" style="width:90px"> <span class="mu">y</span> <input id="aj-q2" type="number" min="1" max="28" style="width:90px">
+            <span class="mu">(1 a 28, válidos en todos los meses)</span></div>
+          <label for="aj-hora">Hora de envío (Costa Rica)</label>
+          <select id="aj-hora" style="width:auto"></select>
+          <p class="mu" style="margin:10px 0 0">El reporte diario se envía todos los días con lo del día anterior. A partir de esta hora el servidor envía lo que corresponda.</p>
+        </div>
+        <div>
+          <label for="aj-inst">Institución</label><input id="aj-inst" maxlength="90">
+          <label for="aj-unidad">Unidad o dirección (opcional)</label><input id="aj-unidad" maxlength="120" placeholder="Ej.: nombre de la división o área de fiscalización">
+          <div class="fila"><div class="c"><label for="aj-color">Color principal</label><input id="aj-color" type="color" style="height:42px;padding:4px"></div>
+            <div class="c"><label>Logo (PNG o JPG, máx. 2 MB)</label><div class="fila" style="flex-wrap:nowrap">
+              <img id="aj-logo-img" alt="Logo actual" class="hide" style="height:40px;max-width:120px;object-fit:contain;border:1px solid var(--bd);border-radius:6px;background:#fff;padding:2px">
+              <input id="aj-logo" type="file" accept="image/png,image/jpeg" style="min-width:0"><button type="button" class="sm hide" id="aj-logo-quitar">Quitar</button></div></div></div>
+          <label for="aj-pie">Pie de página</label><input id="aj-pie" maxlength="160">
+        </div>
+      </div>
+      <p class="err" id="aj-err"></p>
+      <p class="fila" style="margin:8px 0 0"><button class="pri" type="submit">Guardar configuración</button>
+        <a class="btn" id="aj-ejemplo" target="_blank" rel="noopener" href="/api/admin/reportes/ejemplo.pdf?frecuencia=semanal">👁 Ver PDF de ejemplo</a></p>
+    </form>
+    <div class="tabla sec"><table id="rep-personas"></table></div>
+    <div id="rep-res" class="mu" style="margin-top:8px"></div>
+    <h3 class="sec">Historial de envíos</h3>
+    <div class="tabla"><table id="rep-historial"></table></div>
+  </section>
+
+  <section class="bloque" id="clima" style="padding-bottom:40px">
+    <div class="tit"><div><h2>Clima: fuentes de datos</h2><p class="mu">Modelos meteorológicos automáticos, consolidados por día con la mediana de las fuentes.</p></div></div>
+    <div class="grid">
+      <div class="card"><h3>Modelos meteorológicos</h3><div id="g-estado"></div>
+        <p class="mu">Cada fuente se activa con su variable de entorno en el servidor. Programe <code>python backend/actualizar_clima.py</code> al menos cada 12 horas (Google solo guarda 24 h).</p>
+        <button class="pri" id="g-actualizar">↻ Actualizar ahora</button><div id="g-res" class="mu" style="margin-top:8px"></div></div>
+    </div>
+    <div class="tabla sec"><table id="tabla-clima"></table></div>
+    <p class="mu" id="clima-atrib"></p>
+    <h3 class="sec">Seguimiento y análisis</h3>
+    <div class="grid g2">
+      <div class="card"><h3>Precisión del pronóstico por fuente</h3>
+        <p class="mu" style="margin-top:0">Compara lo que cada fuente pronosticó con lo que después quedó registrado (días con confianza media o alta).</p>
+        <div id="precision"></div></div>
+      <div class="card"><h3>Bitácora de actualizaciones</h3><div id="bitacora"></div></div>
+    </div>
+    <div class="card sec"><h3>Exportar datos (CSV)</h3>
+      <p class="mu" style="margin-top:0">Todas las tablas de clima, para análisis en Excel, R, Python o Power BI.</p>
+      <div class="fila"><select id="exp-proy" style="width:auto"><option value="">Todas las obras</option></select>
+        <a class="btn sm" data-exp="registro">Registro consolidado</a><a class="btn sm" data-exp="horas">Datos por hora</a>
+        <a class="btn sm" data-exp="pronosticos">Historial de pronósticos</a><a class="btn sm" data-exp="cambios">Auditoría de cambios</a>
+        <a class="btn sm" data-exp="ejecuciones">Bitácora</a></div></div>
+  </section>
+</main>
+
+<div class="modal" id="modal"><div class="card" id="mbody"></div></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="assets/js/common.js"></script>
+<script src="assets/js/panel.js"></script>
+<script>
+/* ================= Panel de administración ================= */
+/* Estado: proyectos (tarjetas de /api/admin/proyectos, con auditores asignados), usuarios (/api/admin/usuarios),
+   yo (usuario admin actual: para no permitir desactivarse a sí mismo y marcar "usted"). Tras cada cambio se llama
+   a cargar(), que vuelve a pedir todo y repinta (simple y siempre consistente con el servidor). */
+var S = { proyectos: [], usuarios: [], yo: null };
+function auditores() { return S.usuarios.filter(function (u) { return u.rol === "auditor" }) }
+function nombreP(id) { var p = S.proyectos.filter(function (x) { return x.id === id })[0]; return p ? p.nombre : id }
+
+/* Estados de la obra (los define src/proyectos.py). Solo las ACTIVAS cuentan en el resumen, reciben clima y reportes. */
+var ACTIVOS = ["Planificado", "En ejecución", "Suspendido"];
+var CLASE_ESTADO_OBRA = { "Planificado": "b-b", "En ejecución": "b-g", "Suspendido": "b-o", "Finalizado": "b-n", "Cancelado": "b-r" };
+function activa(p) { return ACTIVOS.indexOf(p.estado_obra) >= 0 }
+function badgeObra(e) { return '<span class="badge ' + (CLASE_ESTADO_OBRA[e] || "b-n") + '">' + esc(e) + "</span>" }
+
+/* ---------- RESUMEN ---------- */
+function pintarResumen() {
+  var todos = S.proyectos, P = todos.filter(activa), con = P.filter(function (p) { return p.datos }), aud = auditores();
+  var altas = con.reduce(function (s, p) { return s + p.alertas_altas }, 0), pend = P.reduce(function (s, p) { return s + p.aportes_pendientes }, 0);
+  var sinAud = P.filter(function (p) { return !p.auditores.some(function (a) { return a.activo }) });
+  $("#kpis").innerHTML = kpi("Proyectos activos", P.length + "", "", con.length + " con cámara y datos · " + (todos.length - P.length) + " finalizados o cancelados") +
+    kpi("Atrasados", con.filter(function (p) { return p.brecha <= -10 }).length, con.some(function (p) { return p.brecha <= -10 }) ? "mal" : "bien") +
+    kpi("Alertas de gravedad alta", altas, altas ? "mal" : "bien") + kpi("Aportes por revisar", pend, pend ? "" : "bien") +
+    kpi("Auditores activos", aud.filter(function (u) { return u.activo }).length + " de " + aud.length) +
+    kpi("Proyectos sin auditor", sinAud.length, sinAud.length ? "mal" : "bien");
+  var items = [];
+  con.filter(function (p) { return p.alertas_altas }).forEach(function (p) { items.push("🔴 <b>" + esc(p.nombre) + "</b>: " + p.alertas_altas + " alerta(s) de gravedad alta" + (p.brecha == null ? "." : ", brecha de " + p.brecha + " pts.")) });
+  sinAud.forEach(function (p) { items.push("👤 <b>" + esc(p.nombre) + "</b> no tiene auditor activo asignado.") });
+  P.filter(function (p) { return p.estado_obra === "En ejecución" && !p.contratistas.some(function (c) { return c.activo }) })
+    .forEach(function (p) { items.push("🏗️ <b>" + esc(p.nombre) + "</b> no tiene cuenta de la empresa ejecutora: no se recibe su bitácora ni sus costos.") });
+  P.filter(function (p) { return p.aportes_pendientes }).forEach(function (p) { items.push("🏘️ <b>" + esc(p.nombre) + "</b>: " + p.aportes_pendientes + " aporte(s) ciudadano(s) por revisar.") });
+  $("#atencion").innerHTML = "<h3>Requiere atención</h3>" + (items.length ? items.map(function (t) { return '<p style="margin:6px 0">' + t + "</p>" }).join("") : '<p class="vacio-msg">✅ Todo en orden.</p>');
+}
+
+/* ---------- PROYECTOS ---------- */
+/* Barra horizontal: v = % de ancho; etiqueta = texto a la derecha (por defecto "v%") */
+function barra(t, v, color, etiqueta) { return '<div class="barra"><span>' + t + '</span><span class="t"><i style="width:' + Math.min(100, v || 0) + "%;background:" + color + '"></i></span><b>' + (etiqueta != null ? etiqueta : v == null ? "—" : v + "%") + "</b></div>" }  /* v null: avance sin medición */
+/* Filtro de la lista: texto libre + estado ("activos" por defecto, para no mezclar obras cerradas con las vigentes) */
+var FILTRO = { texto: "", estado: "activos" };
+function pintarFiltros() {
+  var n = function (f) { return S.proyectos.filter(f).length };
+  var ops = [["activos", "Activos", n(activa)], ["todos", "Todos", S.proyectos.length]].concat(CAT.estados.map(function (e) { return [e, e, n(function (p) { return p.estado_obra === e })] }));
+  $("#p-estados").innerHTML = ops.map(function (o) { return '<button type="button" class="chip-f' + (FILTRO.estado === o[0] ? " on" : "") + '" data-filtro="' + esc(o[0]) + '">' + esc(o[1]) + " (" + o[2] + ")</button>" }).join("");
+  $$("[data-filtro]").forEach(function (b) { b.onclick = function () { FILTRO.estado = b.dataset.filtro; pintarProyectos() } });
+}
+function visibles() {
+  var t = FILTRO.texto.toLowerCase();
+  return S.proyectos.filter(function (p) {
+    var e = FILTRO.estado === "todos" || (FILTRO.estado === "activos" ? activa(p) : p.estado_obra === FILTRO.estado);
+    return e && (!t || [p.id, p.nombre, p.institucion, p.ubicacion].join(" ").toLowerCase().indexOf(t) >= 0);
+  });
+}
+$("#p-buscar").oninput = function () { FILTRO.texto = this.value.trim(); pintarProyectos() };
+
+function pintarProyectos() {
+  pintarFiltros();
+  var lista = visibles();
+  if (!lista.length) { $("#lista-p").innerHTML = '<p class="vacio-msg">' + (S.proyectos.length ? "Ningún proyecto coincide con el filtro." : "Aún no hay proyectos. Cree el primero con “+ Nuevo proyecto”.") + "</p>"; return }
+  $("#lista-p").innerHTML = lista.map(function (p) {
+    var emp = p.contratistas.map(function (c) { return '<span class="chip-u' + (c.activo ? "" : " off") + '" title="' + esc(c.nombre) + '">🏗️ ' + esc(c.empresa || c.nombre) + "</span>" }).join("") || '<span class="mu">Sin cuenta asignada</span>';
+    var aud = p.auditores.map(function (a) { return '<span class="chip-u' + (a.activo ? "" : " off") + '">' + esc(a.nombre) + "</span>" }).join("") || '<span class="sin-aud">Sin auditor asignado</span>';
+    var cuerpo = p.datos ?
+      '<div class="barras">' + barra("Previsto", p.previsto, "var(--pr)") + barra("Observado", p.observado, "var(--wa)") + "</div>" +
+      '<div class="datos-p"><div class="' + (p.brecha != null && p.brecha <= -10 ? "mal" : "") + '"><b>' + (p.brecha == null ? "—" : p.brecha) + '</b><span class="mu">pts brecha</span></div>' +
+      '<div class="' + (p.alertas_altas ? "mal" : "") + '"><b>' + p.alertas + '</b><span class="mu">alertas' + (p.alertas_altas ? " (" + p.alertas_altas + " altas)" : "") + "</span></div>" +
+      "<div><b>" + p.obs_abiertas + '</b><span class="mu">obs. abiertas</span></div></div>' +
+      '<div class="mu">Actualizado ' + fmtFecha(p.ultima_actualizacion) + " · Productividad " + p.productividad + "%" + (p.aportes_pendientes ? " · " + p.aportes_pendientes + " aporte(s) por revisar" : "") + "</div>"
+      : '<p class="vacio-msg" style="padding:6px 0">' + (p.imagen ? "📷 Recibiendo imágenes · aún sin análisis de IA." : "⚪ Aún sin cámara ni datos.") + "</p>";
+    /* Botones de cambio de estado según las transiciones permitidas (vienen de /catalogos) */
+    var tr = CAT.transiciones[p.estado_obra] || {};
+    var acciones = Object.keys(tr).map(function (dest) {
+      return '<button class="sm' + (dest === "Cancelado" ? " peligro" : "") + '" data-estado="' + esc(p.id) + '" data-destino="' + esc(dest) + '">' + esc(tr[dest]) + "</button>"
+    }).join("");
+    var clase = p.alertas_altas && activa(p) ? " atencion" : "";
+    if (!activa(p)) clase += " inactiva"; else if (p.estado_obra === "Suspendido") clase += " suspendida";
+    return '<div class="card proy' + clase + '"><div class="cab-p"><div><h3>' + esc(p.nombre) + '</h3><div class="mu">' + esc(p.id) + " · " + esc(p.ubicacion) + " · " + esc(p.institucion) + "</div></div>" +
+      '<div style="text-align:right">' + badgeObra(p.estado_obra) + (p.datos ? '<div style="margin-top:4px"><span class="badge ' + claseEstado(p.estado) + '" title="Diagnóstico de la IA">' + esc(p.estado) + "</span></div>" : "") + "</div></div>" + cuerpo +
+      '<div><div class="mu" style="margin-bottom:4px">Auditores</div><div class="chips">' + aud + "</div></div>" +
+      '<div><div class="mu" style="margin-bottom:4px">Empresa ejecutora</div><div class="chips">' + emp + "</div></div>" +
+      '<div class="acciones"><span class="mu" style="align-self:center">Estado:</span>' + (acciones || '<span class="mu" style="align-self:center">sin acciones (cancelado)</span>') +
+        '<button class="sm" data-historial="' + esc(p.id) + '" title="Historial de cambios de estado">🕘 Historial</button></div>' +
+      '<div class="pie"><span><button class="sm" data-editar="' + esc(p.id) + '">✏️ Editar</button> <button class="sm" data-asignar="' + esc(p.id) + '">👤 Auditores</button> <button class="sm" data-empresa="' + esc(p.id) + '">🏗️ Empresa</button></span>' +
+      '<a class="link" href="/proyecto?p=' + encodeURIComponent(p.id) + '">Ver proyecto →</a></div></div>'
+  }).join("");
+  $$("[data-estado]").forEach(function (b) { b.onclick = function () { modalEstado(b.dataset.estado, b.dataset.destino) } });
+  $$("[data-historial]").forEach(function (b) { b.onclick = function () { modalHistorial(b.dataset.historial) } });
+  $$("[data-asignar]").forEach(function (b) { b.onclick = function () { modalAsignar(b.dataset.asignar, "auditor") } });
+  $$("[data-empresa]").forEach(function (b) { b.onclick = function () { modalAsignar(b.dataset.empresa, "contratista") } });
+  $$("[data-editar]").forEach(function (b) { b.onclick = function () { api("/api/admin/proyectos/" + encodeURIComponent(b.dataset.editar)).then(modalProyecto).catch(function (e) { toast(e.message) }) } });
+}
+
+/* Cambio de estado con motivo obligatorio (queda en proyectos_historial con el correo del admin y la fecha) */
+var EFECTO = {
+  "En ejecución": "La obra vuelve a contar en el resumen, recibe actualizaciones de clima y aparece en los reportes por correo.",
+  "Suspendido": "La obra sigue visible y recibiendo datos, marcada como suspendida (p. ej. orden de suspensión, problema legal o presupuestario).",
+  "Finalizado": "La obra se cierra: deja de actualizar clima y de incluirse en los reportes por correo. Su historial queda consultable y puede reabrirse.",
+  "Cancelado": "La obra se cancela de forma definitiva: deja de actualizar clima y de incluirse en reportes. Esta acción no se puede revertir."
+};
+function modalEstado(pid, destino) {
+  var p = S.proyectos.filter(function (x) { return x.id === pid })[0], accion = CAT.transiciones[p.estado_obra][destino];
+  abrirModal("<h2>" + esc(accion) + " proyecto</h2><p class='mu' style='margin-top:0'>" + esc(p.nombre) + " · " + badgeObra(p.estado_obra) + " → " + badgeObra(destino) + "</p>" +
+    "<p>" + esc(EFECTO[destino] || "") + "</p>" +
+    '<label for="m-motivo">Motivo (obligatorio, queda en el historial)</label><textarea id="m-motivo" style="min-height:70px" maxlength="500" placeholder="Ej.: Orden de suspensión del contrato N.º …"></textarea>' +
+    '<p class="err" id="m-err"></p><p style="margin:10px 0 0"><button class="pri" id="m-ok">' + esc(accion) + '</button> <button data-cerrar>Volver</button></p>', true);
+  $("#m-motivo").focus();
+  $("#m-ok").onclick = function () {
+    var b = this; b.disabled = true;
+    api("/api/admin/proyectos/" + encodeURIComponent(pid) + "/estado", { json: { estado: destino, motivo: $("#m-motivo").value } })
+      .then(function () { cerrarModal(); toast("✅ " + p.nombre + ": " + destino); cargar() })
+      .catch(function (e) { $("#m-err").textContent = e.message; b.disabled = false });
+  };
+}
+function filaHistorial(h, conObra) {
+  return '<div class="hist-item"><span class="mu">' + esc(String(h.fecha).slice(0, 16)) + "</span><span>" + (conObra ? "<b>" + esc(h.nombre || h.project_id) + "</b> · " : "") +
+    (h.estado_anterior ? badgeObra(h.estado_anterior) + " → " : "") + badgeObra(h.estado_nuevo) + ' <span class="mu">por ' + esc(h.usuario || "sistema") + "</span>" +
+    (h.motivo ? '<br><span>' + esc(h.motivo) + "</span>" : "") + "</span></div>";
+}
+function modalHistorial(pid) {
+  var p = S.proyectos.filter(function (x) { return x.id === pid })[0];
+  api("/api/admin/proyectos/" + encodeURIComponent(pid) + "/historial").then(function (H) {
+    abrirModal("<h2>Historial de estados</h2><p class='mu' style='margin-top:0'>" + esc(p.nombre) + ' <span class="mu">(fechas en UTC)</span></p>' +
+      (H.length ? H.map(function (h) { return filaHistorial(h) }).join("") : '<p class="vacio-msg">Sin cambios de estado registrados (proyecto anterior al historial).</p>'));
+  }).catch(function (e) { toast(e.message) });
+}
+
+/* ---------- Formulario de proyecto (crear / editar) ---------- */
+var CAT = { provincias: [], estados: [], transiciones: {} };
+/* Validación previa de coordenadas (para avisar mientras se escribe). Debe coincidir con src/proyectos.py, que es la que manda. */
+var CR = { lat: [8.0, 11.25], lng: [-86.0, -82.5] }, COCO = { lat: [5.4, 5.65], lng: [-87.2, -86.9] };  /* igual que el servidor */
+function enCR(lat, lng) { var d = function (b) { return lat >= b.lat[0] && lat <= b.lat[1] && lng >= b.lng[0] && lng <= b.lng[1] }; return d(CR) || d(COCO) }
+function campo(id, etq, valor, extra) { return '<div><label for="' + id + '"' + (extra && extra.req ? ' class="req"' : "") + ">" + etq + '</label><input id="' + id + '" value="' + esc(valor == null ? "" : valor) + '"' + ((extra && extra.attrs) || "") + "></div>" }
+function opciones(lista, actual) { return lista.map(function (o) { return "<option" + (o === actual ? " selected" : "") + ">" + esc(o) + "</option>" }).join("") }
+
+/* Formulario de proyecto. p = null: crear (al guardar se reabre en modo edición para configurar la cámara);
+   p = proyecto: editar (muestra además el token de la API de imágenes y "Probar clima"). */
+function modalProyecto(p) {
+  var nuevo = !p; p = p || { estado: "En ejecución", provincia: "" };
+  abrirModal("<h2>" + (nuevo ? "Nuevo proyecto" : "Editar " + esc(p.id)) + '</h2><form id="f-proy" novalidate>' +
+    '<fieldset><legend>Datos generales</legend><div class="g2f">' +
+      campo("fp-nombre", "Nombre de la obra", p.nombre, { req: 1 }) + campo("fp-institucion", "Institución responsable", p.institucion, { req: 1, attrs: ' placeholder="MEP, CCSS, Municipalidad…"' }) +
+      /* El estado solo se elige al crear; después se cambia con los botones de la tarjeta (con motivo e historial) */
+      (nuevo ? '<div><label for="fp-estado" class="req">Estado inicial</label><select id="fp-estado">' + opciones(["Planificado", "En ejecución"], p.estado) + "</select></div>"
+        : '<div><label>Estado</label><p style="margin:8px 0">' + badgeObra(p.estado) + ' <span class="mu">Se cambia con los botones de la tarjeta.</span></p></div>') +
+      campo("fp-contratista", "Contratista", p.contratista) +
+    '</div><label for="fp-descripcion">Descripción</label><textarea id="fp-descripcion" style="min-height:60px">' + esc(p.descripcion || "") + "</textarea></fieldset>" +
+    '<fieldset><legend>Contrato y cronograma</legend><div class="g3f">' +
+      campo("fp-contratacion", "N.º de contratación (SICOP)", p.contratacion) + campo("fp-monto", "Monto del contrato (₡)", p.monto_crc, { attrs: ' type="number" min="0" step="any"' }) +
+      campo("fp-cronograma", "Versión del cronograma", p.cronograma, { attrs: ' placeholder="v1 (01-ago-2026)"' }) +
+      campo("fp-inicio", "Fecha de inicio", p.fecha_inicio, { attrs: ' type="date"' }) + campo("fp-fin", "Fecha de fin prevista", p.fecha_fin, { attrs: ' type="date"' }) +
+    "</div></fieldset>" +
+    '<fieldset><legend>Ubicación</legend><div class="g3f">' +
+      '<div><label for="fp-provincia" class="req">Provincia</label><select id="fp-provincia"><option value="">— Seleccione —</option>' + opciones(CAT.provincias, p.provincia) + "</select></div>" +
+      campo("fp-canton", "Cantón", p.canton, { req: 1 }) + campo("fp-distrito", "Distrito", p.distrito) + "</div>" +
+      campo("fp-direccion", "Dirección / señas", p.direccion) +
+      '<div class="g2f">' + campo("fp-lat", "Latitud", p.lat, { req: 1, attrs: ' inputmode="decimal" placeholder="9.9795"' }) + campo("fp-lng", "Longitud", p.lng, { req: 1, attrs: ' inputmode="decimal" placeholder="-83.0408"' }) + "</div>" +
+      '<p class="fila" style="margin:8px 0 0"><span id="fp-coord" class="mu" style="flex:1">Ingrese las coordenadas de la obra.</span><button type="button" class="sm" id="fp-gps">📍 Usar mi ubicación</button></p>' +
+      '<iframe class="mapa hide" id="fp-mapa" title="Vista previa de la ubicación" loading="lazy" referrerpolicy="no-referrer"></iframe>' +
+      '<p class="mu hide" id="fp-mapa-link" style="margin:6px 0 0"></p></fieldset>' +
+    '<fieldset><legend>Cámara y datos</legend><div class="g2f">' +
+      campo("fp-camara", "Código de la cámara", p.camara, { attrs: ' placeholder="DIA-0142"' }) +
+"</div>" +
+      (nuevo ? '<p class="mu">Al guardar podrá generar el token de la API de imágenes para la cámara.</p>' : '<div id="fp-token"></div>' +
+        '<p class="fila" style="margin:12px 0 0"><button type="button" class="sm" id="fp-clima">🌦️ Probar clima en estas coordenadas</button><span id="fp-clima-res" class="mu"></span></p>') +
+    "</fieldset>" +
+    '<p class="err" id="m-err"></p><p style="margin:10px 0 0"><button class="pri" type="submit">' + (nuevo ? "Crear proyecto" : "Guardar cambios") + '</button> <button type="button" data-cerrar>Cancelar</button></p></form>', true);
+
+  var lat = $("#fp-lat"), lng = $("#fp-lng");
+  /* Valida las coordenadas y muestra el mapa (iframe de OpenStreetMap, sin clave). Se llama con un retardo de 500 ms
+     al escribir, para no recargar el mapa en cada tecla. Acepta coma decimal. */
+  function revisar() {
+    var a = parseFloat(String(lat.value).replace(",", ".")), b = parseFloat(String(lng.value).replace(",", ".")), m = $("#fp-coord");
+    if (isNaN(a) || isNaN(b)) { m.className = "mu"; m.textContent = "Ingrese las coordenadas de la obra."; $("#fp-mapa").classList.add("hide"); $("#fp-mapa-link").classList.add("hide"); return }
+    if (!enCR(a, b)) { m.className = "coord-mal"; m.textContent = "⚠️ Fuera de Costa Rica. ¿Invirtió latitud y longitud o falta el signo negativo de la longitud?"; $("#fp-mapa").classList.add("hide"); return }
+    m.className = "coord-ok"; m.textContent = "✓ Coordenadas dentro de Costa Rica. Verifique en el mapa que el marcador esté sobre la obra.";
+    var d = 0.006, src = "https://www.openstreetmap.org/export/embed.html?bbox=" + (b - d) + "," + (a - d) + "," + (b + d) + "," + (a + d) + "&layer=mapnik&marker=" + a + "," + b;
+    var f = $("#fp-mapa"); if (f.dataset.src !== src) { f.src = src; f.dataset.src = src } f.classList.remove("hide");
+    $("#fp-mapa-link").innerHTML = 'Abrir en <a class="link" target="_blank" rel="noopener" href="https://www.google.com/maps?q=' + a + "," + b + '">Google Maps</a> · <a class="link" target="_blank" rel="noopener" href="https://www.openstreetmap.org/?mlat=' + a + "&mlon=" + b + '#map=17/' + a + "/" + b + '">OpenStreetMap</a>';
+    $("#fp-mapa-link").classList.remove("hide");
+  }
+  var t; lat.oninput = lng.oninput = function () { clearTimeout(t); t = setTimeout(revisar, 500) }; revisar();
+  $("#fp-gps").onclick = function () {
+    if (!navigator.geolocation) return toast("Este navegador no permite obtener la ubicación");
+    navigator.geolocation.getCurrentPosition(function (pos) { lat.value = pos.coords.latitude.toFixed(6); lng.value = pos.coords.longitude.toFixed(6); revisar() },
+      function () { toast("No se pudo obtener la ubicación (permiso denegado o sin GPS)") }, { enableHighAccuracy: true, timeout: 10000 });
+  };
+  if (!nuevo) { pintarToken(p); $("#fp-clima").onclick = function () { probarClima(p.id) } }
+
+  $("#f-proy").onsubmit = function (e) {
+    e.preventDefault();
+    var v = function (id) { return $("#" + id).value.trim() };
+    var datos = { nombre: v("fp-nombre"), institucion: v("fp-institucion"), estado: nuevo ? v("fp-estado") : p.estado, contratista: v("fp-contratista"), descripcion: v("fp-descripcion"),
+      contratacion: v("fp-contratacion"), monto_crc: v("fp-monto") || null, cronograma: v("fp-cronograma"), fecha_inicio: v("fp-inicio") || null, fecha_fin: v("fp-fin") || null,
+      provincia: v("fp-provincia"), canton: v("fp-canton"), distrito: v("fp-distrito"), direccion: v("fp-direccion"),
+      lat: v("fp-lat").replace(",", "."), lng: v("fp-lng").replace(",", "."), camara: v("fp-camara") };
+    var boton = $('#f-proy button[type="submit"]'); boton.disabled = true;
+    (nuevo ? api("/api/admin/proyectos", { json: datos }) : api("/api/admin/proyectos/" + encodeURIComponent(p.id), { method: "PUT", json: datos }))
+      .then(function (r) {
+        toast(nuevo ? "✅ Proyecto " + r.id + " creado" : "✅ Cambios guardados"); cargar();
+        if (nuevo) return api("/api/admin/proyectos/" + encodeURIComponent(r.id)).then(modalProyecto);  /* sigue abierto para configurar la cámara */
+        cerrarModal();
+      }).catch(function (x) { $("#m-err").textContent = x.message; $("#m-err").scrollIntoView({ block: "nearest" }) })
+      .then(function () { if ($('#f-proy button[type="submit"]')) $('#f-proy button[type="submit"]').disabled = false });
+  };
+}
+
+/* Bloque "API de imágenes" del formulario. nuevoToken solo existe justo después de generarlo: el servidor no lo vuelve
+   a entregar (en la base queda su hash), por eso se muestra una única vez con botón "Copiar". */
+function pintarToken(p, nuevoToken) {
+  var url = location.origin + "/api/camaras/" + encodeURIComponent(p.id) + "/imagenes";
+  $("#fp-token").innerHTML = '<h3 style="margin:14px 0 4px">API de imágenes</h3>' +
+    (nuevoToken ? '<p class="coord-ok" style="margin:0 0 6px">Copie el token ahora: por seguridad no se volverá a mostrar.</p><div class="fila"><input class="token c" id="fp-tok" readonly value="' + esc(nuevoToken) + '"><button type="button" class="sm" id="fp-copiar">Copiar</button></div>'
+      : '<p class="mu" style="margin:0">' + (p.camara_api ? '<span class="badge b-g">Token activo</span> termina en …' + esc(p.token_pista || "") : '<span class="badge b-n">Sin token</span> La cámara aún no puede enviar imágenes.') + "</p>") +
+    '<p class="mu" style="margin:8px 0 0">La cámara envía cada captura por <b>POST</b> a <code>' + esc(url) + "</code> con el encabezado <code>Authorization: Bearer &lt;token&gt;</code>.</p>" +
+    '<pre class="ej">curl -H "Authorization: Bearer ' + esc(nuevoToken || "dia_…") + '" \
+  -F foto=@captura.jpg -F tomada=2026-10-24T14:30:00 \
+  ' + esc(url) + "</pre>" +
+    '<p style="margin:10px 0 0"><button type="button" class="sm" id="fp-gen">' + (p.camara_api || nuevoToken ? "↻ Generar nuevo token" : "🔑 Generar token") + "</button> " +
+    (p.camara_api || nuevoToken ? '<button type="button" class="sm" id="fp-rev">Revocar</button>' : "") + "</p>";
+  if ($("#fp-copiar")) $("#fp-copiar").onclick = function () { $("#fp-tok").select(); (navigator.clipboard ? navigator.clipboard.writeText(nuevoToken) : Promise.resolve(document.execCommand("copy"))).then(function () { toast("Token copiado") }) };
+  $("#fp-gen").onclick = function () {
+    if ((p.camara_api || nuevoToken) && !confirm("El token actual dejará de funcionar y la cámara deberá configurarse con el nuevo. ¿Continuar?")) return;
+    api("/api/admin/proyectos/" + encodeURIComponent(p.id) + "/token", { method: "POST" }).then(function (r) { pintarToken(p, r.token); cargar() }).catch(function (e) { toast(e.message) });
+  };
+  if ($("#fp-rev")) $("#fp-rev").onclick = function () {
+    if (!confirm("La cámara dejará de poder enviar imágenes. ¿Revocar el token?")) return;
+    api("/api/admin/proyectos/" + encodeURIComponent(p.id) + "/token", { method: "DELETE" }).then(function () { p.camara_api = false; pintarToken(p); toast("Token revocado"); cargar() }).catch(function (e) { toast(e.message) });
+  };
+}
+
+function probarClima(pid) {
+  var r = $("#fp-clima-res"); r.textContent = "Consultando…";
+  api("/api/admin/proyectos/" + encodeURIComponent(pid) + "/probar-clima", { method: "POST" })
+    .then(function (j) { var a = j.actual; r.innerHTML = '<span class="coord-ok">✓ ' + Math.round(a.temp) + "°C, " + esc(a.condicion || "") + ", humedad " + a.humedad + "% · respondieron " + a.fuentes.map(function (f) { return esc(f.fuente) }).join(", ") + "</span>" })
+    .catch(function (e) { r.innerHTML = '<span class="coord-mal">' + esc(e.message) + "</span>" });
+}
+$("#nuevo-p").onclick = function () { modalProyecto(null) };
+/* Qué cambia entre auditores y empresa ejecutora al asignar: lista de la tarjeta (p.auditores / p.contratistas),
+   ruta PUT /api/admin/proyectos/{pid}/{ruta} (cada una reemplaza SOLO las asignaciones de su rol) y textos */
+var ROL = {
+  auditor: { lista: "auditores", ruta: "auditores", titulo: "Asignar auditores", vacio: "No hay auditores. Cree uno en la sección Auditores." },
+  contratista: { lista: "contratistas", ruta: "contratistas", titulo: "Asignar empresa ejecutora", vacio: "No hay cuentas de contratista. Cree una en la sección Contratistas." }
+};
+/* Asignar DESDE el proyecto: se envía la lista completa marcada (PUT reemplaza las asignaciones de ese rol) */
+function modalAsignar(pid, rol) {
+  var R = ROL[rol], p = S.proyectos.filter(function (x) { return x.id === pid })[0], actuales = p[R.lista].map(function (a) { return a.id });
+  var A = S.usuarios.filter(function (u) { return u.rol === rol });
+  abrirModal("<h2>" + R.titulo + "</h2><p class='mu' style='margin-top:0'>" + esc(p.nombre) + "</p>" +
+    (A.length ? A.map(function (u) {
+      return '<label class="check"><input type="checkbox" value="' + u.id + '"' + (actuales.indexOf(u.id) >= 0 ? " checked" : "") + "> <span><b>" + esc(rol === "contratista" ? (u.empresa || u.nombre) : u.nombre) + '</b> <span class="mu">' +
+        (rol === "contratista" ? esc(u.nombre) + " · " : "") + esc(u.correo) + (u.activo ? "" : " · inactivo") + "</span></span></label>"
+    }).join("") : '<p class="vacio-msg">' + R.vacio + "</p>") +
+    '<p class="err" id="m-err"></p><p style="margin:10px 0 0"><button class="pri" id="m-ok">Guardar</button> <button data-cerrar>Cancelar</button></p>', true);
+  $("#m-ok").onclick = function () {
+    var ids = $$("#mbody input:checked").map(function (i) { return +i.value });
+    api("/api/admin/proyectos/" + encodeURIComponent(pid) + "/" + R.ruta, { method: "PUT", json: { usuarios: ids } })
+      .then(function () { cerrarModal(); toast("✅ Asignación guardada"); cargar() }).catch(function (e) { $("#m-err").textContent = e.message });
+  };
+}
+
+/* ---------- AUDITORES ---------- */
+/* Tabla de personas. El casillero "Activo" del propio admin está deshabilitado (no puede quitarse el acceso a sí mismo). */
+function pintarUsuarios() {
+  var U = S.usuarios.filter(function (u) { return u.rol !== "contratista" });  /* los contratistas tienen su propia sección */
+  if (!U.length) { $("#tabla-u").innerHTML = '<tbody><tr><td class="vacio-msg">No hay cuentas registradas.</td></tr></tbody>'; return }
+  $("#tabla-u").innerHTML = "<thead><tr><th>Nombre</th><th>Correo</th><th>Rol</th><th>Proyectos asignados</th><th>Reporte por correo</th><th>Acceso</th><th></th></tr></thead><tbody>" +
+    U.map(function (u) {
+      var esAdmin = u.rol === "admin";
+      return "<tr><td><b>" + esc(u.nombre) + "</b>" + (S.yo && u.id === S.yo.id ? ' <span class="mu">(usted)</span>' : "") + "</td><td>" + esc(u.correo) + '</td><td><span class="badge ' + (esAdmin ? "b-b" : "b-n") + '">' + (esAdmin ? "Administrador" : "Auditor") + "</span></td>" +
+        '<td><div class="chips">' + (esAdmin ? '<span class="mu">Todos</span>' : (u.proyectos.map(function (p) { return '<span class="chip-u">' + esc(nombreP(p)) + "</span>" }).join("") || '<span class="mu">Ninguno</span>')) + "</div></td>" +
+        '<td><select data-ufrec="' + u.id + '" aria-label="Frecuencia del reporte de ' + esc(u.nombre) + '" style="width:auto">' + selFrec(u.frecuencia_reporte) + "</select></td>" +
+        '<td><label class="estado-u"><input type="checkbox" data-activo="' + u.id + '"' + (u.activo ? " checked" : "") + (u.id === S.yo.id ? " disabled" : "") + "> " + (u.activo ? "Activo" : "Inactivo") + "</label></td>" +
+        '<td class="num"><button class="sm" data-editaru="' + u.id + '">✏️ Editar</button> ' + (esAdmin ? "" : '<button class="sm" data-proy="' + u.id + '">Proyectos</button> ') + '<button class="sm" data-clave="' + u.id + '">Contraseña</button></td></tr>'
+    }).join("") + "</tbody>";
+  $$("#tabla-u [data-ufrec]").forEach(function (s) {
+    s.onchange = function () {
+      api("/api/admin/usuarios/" + s.dataset.ufrec, { method: "PATCH", json: { frecuencia: s.value } })
+        .then(function () { toast("✅ Frecuencia actualizada: " + FREC[s.value]); cargar() }).catch(function (x) { toast(x.message); cargar() });
+    };
+  });
+  $$("#tabla-u [data-editaru]").forEach(function (b) { b.onclick = function () { modalEditarUsuario(+b.dataset.editaru) } });
+  $$("#tabla-u [data-activo]").forEach(function (c) {
+    c.onchange = function () { api("/api/admin/usuarios/" + c.dataset.activo, { method: "PATCH", json: { activo: c.checked } }).then(function () { toast(c.checked ? "Acceso activado" : "Acceso desactivado"); cargar() }).catch(function (e) { toast(e.message); cargar() }) }
+  });
+  $$("#tabla-u [data-proy]").forEach(function (b) { b.onclick = function () { modalProyectosDe(+b.dataset.proy) } });
+  $$("#tabla-u [data-clave]").forEach(function (b) { b.onclick = function () { modalClave(+b.dataset.clave) } });
+}
+/* Asignar desde la persona: actualiza cada proyecto que cambió */
+function modalProyectosDe(uid) {
+  var u = S.usuarios.filter(function (x) { return x.id === uid })[0];
+  abrirModal("<h2>Proyectos de " + esc(u.nombre) + "</h2>" + S.proyectos.map(function (p) {
+    return '<label class="check"><input type="checkbox" value="' + esc(p.id) + '"' + (u.proyectos.indexOf(p.id) >= 0 ? " checked" : "") + "> <span><b>" + esc(p.nombre) + '</b> <span class="mu">' + esc(p.institucion) + (p.datos ? "" : " · sin datos") + "</span></span></label>"
+  }).join("") + '<p class="err" id="m-err"></p><p style="margin:10px 0 0"><button class="pri" id="m-ok">Guardar</button> <button data-cerrar>Cancelar</button></p>', true);
+  $("#m-ok").onclick = function () {
+    var marcados = $$("#mbody input:checked").map(function (i) { return i.value });
+    var R = ROL[u.rol];
+    var cambios = S.proyectos.filter(function (p) { return (marcados.indexOf(p.id) >= 0) !== (u.proyectos.indexOf(p.id) >= 0) }).map(function (p) {
+      var ids = p[R.lista].map(function (a) { return a.id }).filter(function (i) { return i !== uid });
+      if (marcados.indexOf(p.id) >= 0) ids.push(uid);
+      return api("/api/admin/proyectos/" + encodeURIComponent(p.id) + "/" + R.ruta, { method: "PUT", json: { usuarios: ids } });
+    });
+    Promise.all(cambios).then(function () { cerrarModal(); toast("✅ Proyectos actualizados"); cargar() }).catch(function (e) { $("#m-err").textContent = e.message });
+  };
+}
+/* Editar datos de la cuenta (PATCH parcial). Auditor/admin: nombre, correo y frecuencia del reporte.
+   Contratista: empresa, ingeniero responsable, correo y teléfono (no recibe reportes). El correo es el usuario de acceso. */
+function modalEditarUsuario(uid) {
+  var u = S.usuarios.filter(function (x) { return x.id === uid })[0], esC = u.rol === "contratista";
+  abrirModal("<h2>Editar " + ({ admin: "administrador", auditor: "auditor", contratista: "contratista" })[u.rol] + "</h2>" +
+    (esC ? '<label for="e-empresa">Empresa ejecutora</label><input id="e-empresa" value="' + esc(u.empresa || "") + '">' : "") +
+    '<label for="e-nombre">' + (esC ? "Ingeniero(a) responsable de la obra" : "Nombre completo") + '</label><input id="e-nombre" value="' + esc(u.nombre) + '">' +
+    '<label for="e-correo">Correo (es el usuario para ingresar)</label><input id="e-correo" type="email" value="' + esc(u.correo) + '">' +
+    (esC ? '<label for="e-tel">Teléfono</label><input id="e-tel" value="' + esc(u.telefono || "") + '">'
+      : '<label for="e-frec">Reporte por correo</label><select id="e-frec">' + selFrec(u.frecuencia_reporte) + "</select>") +
+    '<p class="err" id="m-err"></p><p style="margin:10px 0 0"><button class="pri" id="m-ok">Guardar cambios</button> <button data-cerrar>Cancelar</button></p>', true);
+  $("#e-nombre").focus();
+  $("#m-ok").onclick = function () {
+    var correo = $("#e-correo").value.trim();
+    if (S.yo && uid === S.yo.id && correo.toLowerCase() !== u.correo && !confirm("Va a cambiar su propio correo de acceso. La próxima vez deberá ingresar con " + correo + ". ¿Continuar?")) return;
+    var cambios = { nombre: $("#e-nombre").value, correo: correo };
+    if (esC) { cambios.empresa = $("#e-empresa").value; cambios.telefono = $("#e-tel").value } else cambios.frecuencia = $("#e-frec").value;
+    api("/api/admin/usuarios/" + uid, { method: "PATCH", json: cambios })
+      .then(function () { cerrarModal(); toast("✅ Datos actualizados"); cargar() }).catch(function (e) { $("#m-err").textContent = e.message });
+  };
+}
+function modalClave(uid) {
+  var u = S.usuarios.filter(function (x) { return x.id === uid })[0];
+  abrirModal("<h2>Nueva contraseña</h2><p class='mu' style='margin-top:0'>" + esc(u.nombre) + " · " + esc(u.correo) + "</p>" +
+    '<label for="m-clave">Contraseña (mínimo 6 caracteres)</label><input id="m-clave" type="text" autocomplete="off">' +
+    '<p class="err" id="m-err"></p><p style="margin:10px 0 0"><button class="pri" id="m-ok">Guardar</button> <button data-cerrar>Cancelar</button></p>', true);
+  $("#m-clave").focus();
+  $("#m-ok").onclick = function () {
+    api("/api/admin/usuarios/" + uid, { method: "PATCH", json: { clave: $("#m-clave").value } }).then(function () { cerrarModal(); toast("✅ Contraseña actualizada") }).catch(function (e) { $("#m-err").textContent = e.message });
+  };
+}
+/* Crear cuenta de auditor o de contratista y asignarle proyectos (solo obras activas para el contratista) */
+function nuevaCuenta(rol) {
+  var esC = rol === "contratista", R = ROL[rol];
+  var obras = S.proyectos.filter(function (p) { return !esC || activa(p) });
+  abrirModal("<h2>" + (esC ? "Nuevo contratista (empresa ejecutora)" : "Nuevo auditor") + "</h2>" +
+    (esC ? '<label for="n-empresa">Empresa ejecutora</label><input id="n-empresa" placeholder="Razón social">' : "") +
+    '<label for="n-nombre">' + (esC ? "Ingeniero(a) responsable de la obra" : "Nombre completo") + '</label><input id="n-nombre">' +
+    '<label for="n-correo">' + (esC ? "Correo" : "Correo institucional") + '</label><input id="n-correo" type="email" placeholder="' + (esC ? "ingeniero@empresa.cr" : "nombre@cgr.go.cr") + '">' +
+    (esC ? '<label for="n-tel">Teléfono (opcional)</label><input id="n-tel">' : "") +
+    '<label for="n-clave">Contraseña inicial (mínimo 6 caracteres)</label><input id="n-clave" type="text" autocomplete="off">' +
+    (esC ? "" : '<label for="n-frec">Reporte por correo</label><select id="n-frec">' + selFrec("semanal") + "</select>") +
+    '<div class="mu" style="margin:12px 0 4px">' + (esC ? "Obras en las que reporta información" : "Proyectos asignados") + "</div>" +
+    obras.map(function (p) { return '<label class="check"><input type="checkbox" value="' + esc(p.id) + '"> <span>' + esc(p.nombre) + "</span></label>" }).join("") +
+    '<p class="err" id="m-err"></p><p style="margin:10px 0 0"><button class="pri" id="m-ok">' + (esC ? "Crear contratista" : "Crear auditor") + '</button> <button data-cerrar>Cancelar</button></p>', true);
+  $(esC ? "#n-empresa" : "#n-nombre").focus();
+  $("#m-ok").onclick = function () {
+    var proys = $$("#mbody input:checked").map(function (i) { return i.value });
+    var datos = { rol: rol, nombre: $("#n-nombre").value, correo: $("#n-correo").value, clave: $("#n-clave").value };
+    if (esC) { datos.empresa = $("#n-empresa").value; datos.telefono = $("#n-tel").value } else datos.frecuencia = $("#n-frec").value;
+    api("/api/admin/usuarios", { json: datos }).then(function (r) {
+      return Promise.all(proys.map(function (pid) {
+        var p = S.proyectos.filter(function (x) { return x.id === pid })[0];
+        return api("/api/admin/proyectos/" + encodeURIComponent(pid) + "/" + R.ruta, { method: "PUT", json: { usuarios: p[R.lista].map(function (a) { return a.id }).concat([r.id]) } });
+      }));
+    }).then(function () { cerrarModal(); toast(esC ? "✅ Contratista creado" : "✅ Auditor creado"); cargar() }).catch(function (e) { $("#m-err").textContent = e.message });
+  };
+}
+$("#nuevo").onclick = function () { nuevaCuenta("auditor") };
+$("#nuevo-c").onclick = function () { nuevaCuenta("contratista") };
+
+/* ---------- CONTRATISTAS ---------- */
+/* Cuentas de la empresa ejecutora. "Dar de baja" = desactivar el acceso (la cuenta y todo lo que cargó se conservan). */
+function pintarContratistas() {
+  var U = S.usuarios.filter(function (u) { return u.rol === "contratista" });
+  $("#tabla-c").innerHTML = U.length ? "<thead><tr><th>Empresa</th><th>Ingeniero(a) responsable</th><th>Contacto</th><th>Obras asignadas</th><th>Acceso</th><th></th></tr></thead><tbody>" +
+    U.map(function (u) {
+      return "<tr><td><b>" + esc(u.empresa || "—") + "</b></td><td>" + esc(u.nombre) + "</td><td>" + esc(u.correo) + (u.telefono ? '<br><span class="mu">' + esc(u.telefono) + "</span>" : "") + "</td>" +
+        '<td><div class="chips">' + (u.proyectos.map(function (p) { return '<span class="chip-u">' + esc(nombreP(p)) + "</span>" }).join("") || '<span class="mu">Ninguna</span>') + "</div></td>" +
+        '<td><label class="estado-u"><input type="checkbox" data-baja="' + u.id + '"' + (u.activo ? " checked" : "") + "> " + (u.activo ? "Activo" : '<span class="badge b-r">De baja</span>') + "</label></td>" +
+        '<td class="num"><button class="sm" data-editaru="' + u.id + '">✏️ Editar</button> <button class="sm" data-proy="' + u.id + '">Obras</button> <button class="sm" data-clave="' + u.id + '">Contraseña</button></td></tr>'
+    }).join("") + "</tbody>" : '<tbody><tr><td class="vacio-msg">Aún no hay cuentas de empresas ejecutoras. Cree la primera con “+ Nuevo contratista”.</td></tr></tbody>';
+  $$("#tabla-c [data-baja]").forEach(function (c) {
+    c.onchange = function () {
+      if (!c.checked && !confirm("La empresa dejará de poder ingresar y cargar información. Lo que ya cargó se conserva. ¿Dar de baja?")) { c.checked = true; return }
+      api("/api/admin/usuarios/" + c.dataset.baja, { method: "PATCH", json: { activo: c.checked } }).then(function () { toast(c.checked ? "Acceso reactivado" : "Cuenta dada de baja"); cargar() }).catch(function (e) { toast(e.message); cargar() });
+    };
+  });
+  $$("#tabla-c [data-editaru]").forEach(function (b) { b.onclick = function () { modalEditarUsuario(+b.dataset.editaru) } });
+  $$("#tabla-c [data-proy]").forEach(function (b) { b.onclick = function () { modalProyectosDe(+b.dataset.proy) } });
+  $$("#tabla-c [data-clave]").forEach(function (b) { b.onclick = function () { modalClave(+b.dataset.clave) } });
+}
+
+/* ---------- SEGUIMIENTO ---------- */
+/* Datos de /api/admin/seguimiento (src/seguimiento.py): una fila por obra + totales + últimos cambios de estado */
+var ALERTAS = { "A-01": "Inactividad con clima apto", "A-02": "Detección de IA con baja confianza", "A-03": "Brecha de avance", "A-04": "Maquinaria encendida sin operar",
+  /* Cruce con lo que declara la empresa ejecutora (src/contratista.py) */
+  "C-01": "Avance reportado mayor al observado", "C-02": "Ejecución financiera mayor al avance físico", "C-03": "Bitácora contradice a la IA",
+  "C-04": "Paro por lluvia con clima apto", "C-05": "Días sin bitácora" };
+function num(v, suf) { return v == null ? '<span class="mu">—</span>' : v + (suf || "") }
+function tendencia(t) {
+  if (t == null) return '<span class="mu">—</span>';
+  return t > 0 ? '<span class="pos">▲ +' + t + "</span>" : t < 0 ? '<span class="neg">▼ ' + t + "</span>" : '<span class="mu">= 0</span>';
+}
+/* Barras horizontales divergentes: brecha negativa (atraso) a la izquierda en rojo, positiva a la derecha en verde */
+function graficoBrechas(obras) {
+  var con = obras.filter(function (o) { return o.brecha != null });
+  if (!con.length) return '<p class="vacio-msg">Ninguna obra tiene aún análisis de la IA.</p>';
+  con.sort(function (a, b) { return a.brecha - b.brecha });
+  var max = Math.max(10, Math.max.apply(null, con.map(function (o) { return Math.abs(o.brecha) }))), W = 520, et = 170, alto = 26, cx = et + (W - et) / 2, esc_ = (W - et) / 2 / max;
+  return '<svg class="brechas" viewBox="0 0 ' + W + " " + (con.length * alto + 22) + '" width="100%" role="img" aria-label="Brecha de avance por obra">' +
+    '<line class="eje" x1="' + cx + '" x2="' + cx + '" y1="0" y2="' + con.length * alto + '"/>' +
+    con.map(function (o, i) {
+      var y = i * alto, w = Math.abs(o.brecha) * esc_, x = o.brecha < 0 ? cx - w : cx, col = o.brecha <= -10 ? "var(--al)" : o.brecha < 0 ? "var(--wa)" : "var(--ok)";
+      var nom = o.nombre.length > 24 ? o.nombre.slice(0, 23) + "…" : o.nombre;
+      return "<g><title>" + esc(o.nombre + ": " + o.brecha + " pts") + '</title><text x="0" y="' + (y + 17) + '">' + esc(nom) + "</text>" +
+        '<rect x="' + x + '" y="' + (y + 5) + '" width="' + Math.max(w, 1) + '" height="16" rx="3" fill="' + col + '"/>' +
+        '<text x="' + (o.brecha < 0 ? x - 4 : x + w + 4) + '" y="' + (y + 17) + '" text-anchor="' + (o.brecha < 0 ? "end" : "start") + '" style="fill:var(--tx);font-weight:600">' + o.brecha + "</text></g>"
+    }).join("") +
+    '<text x="' + cx + '" y="' + (con.length * alto + 16) + '" text-anchor="middle">0 · ← atraso | adelanto →</text></svg>';
+}
+function cargarSeguimiento() {
+  return api("/api/admin/seguimiento").then(function (s) {
+    var O = s.obras, act = O.filter(activa), con = act.filter(function (o) { return o.brecha != null });
+    var empeoran = con.filter(function (o) { return o.tendencia_7d != null && o.tendencia_7d < 0 }).length;
+    var sinDatos = act.filter(function (o) { return o.dias_sin_datos != null && o.dias_sin_datos > 2 }).length;
+    var prom = con.length ? Math.round(con.reduce(function (a, o) { return a + o.brecha }, 0) / con.length * 10) / 10 : null;
+    $("#seg-kpis").innerHTML = CAT.estados.map(function (e) { return kpi(e, (s.por_estado[e] || 0) + "", e === "Suspendido" && s.por_estado[e] ? "mal" : "") }).join("") +
+      kpi("Brecha promedio (activas)", prom == null ? "—" : prom + " pts", prom != null && prom <= -10 ? "mal" : "") +
+      kpi("Empeorando (7 d)", empeoran, empeoran ? "mal" : "bien", "Obras cuya brecha creció en los últimos 7 registros") +
+      kpi("Sin datos recientes", sinDatos, sinDatos ? "mal" : "bien", "Obras activas sin registro de la cámara en más de 2 días");
+    $("#seg-tabla").innerHTML = O.length ? "<thead><tr><th>Obra</th><th>Estado</th><th class='num'>Previsto</th><th class='num'>Observado</th><th class='num'>Brecha</th><th class='num'>Tendencia 7 d</th><th class='num' title='Último avance acumulado declarado en la bitácora'>Reportado empresa</th><th class='num' title='% del presupuesto por partidas ya ejecutado'>Ejecución ₡</th>" +
+      "<th class='num'>Alertas</th><th class='num'>Plazo</th><th class='num'>Último dato</th><th class='num'>Lluvia 7 d</th><th class='num'>Obs. / aportes</th></tr></thead><tbody>" +
+      O.map(function (o) {
+        return "<tr" + (activa(o) ? "" : ' style="opacity:.65"') + '><td><b>' + esc(o.nombre) + '</b><br><span class="mu">' + esc(o.id) + " · " + esc(o.institucion) + "</span></td><td>" + badgeObra(o.estado_obra) + "</td>" +
+          '<td class="num">' + num(o.previsto, "%") + '</td><td class="num">' + num(o.observado, "%") + '</td><td class="num"><b class="' + (o.brecha != null && o.brecha <= -10 ? "neg" : "") + '">' + num(o.brecha) + "</b></td>" +
+          '<td class="num">' + tendencia(o.tendencia_7d) + "</td>" +
+          '<td class="num">' + (o.reportado == null ? '<span class="mu">' + (o.empresa_asignada ? "—" : "Sin empresa") + "</span>" : '<span class="' + (o.observado != null && o.reportado - o.observado > 5 ? "neg" : "") + '">' + o.reportado + "%</span>") + "</td>" +
+          '<td class="num">' + (o.pct_financiero == null ? '<span class="mu">—</span>' : '<span class="' + (o.observado != null && o.pct_financiero - o.observado > 10 ? "neg" : "") + '">' + o.pct_financiero + "%</span>") + '</td><td class="num">' + (o.alertas ? o.alertas + (o.alertas_altas ? ' <span class="badge b-r">' + o.alertas_altas + " altas</span>" : "") : '<span class="mu">0</span>') + "</td>" +
+          '<td class="num" title="% del plazo contractual transcurrido">' + (o.plazo_pct == null ? '<span class="mu" title="Faltan fechas de inicio y fin">—</span>' : o.plazo_pct + "%" + (o.dias_restantes < 0 ? '<br><span class="neg">vencido</span>' : '<br><span class="mu">' + o.dias_restantes + " d</span>")) + "</td>" +
+          '<td class="num">' + (o.ultima_actualizacion ? fmtFecha(o.ultima_actualizacion) + '<br><span class="' + (o.dias_sin_datos > 2 ? "neg" : "mu") + '">hace ' + o.dias_sin_datos + " d</span>" : '<span class="mu">Sin datos</span>') + "</td>" +
+          '<td class="num">' + (o.lluvia_7d == null ? '<span class="mu">—</span>' : o.lluvia_7d + ' mm<br><span class="mu">' + o.no_aptos_7d + " no aptos</span>") + "</td>" +
+          '<td class="num">' + o.obs_abiertas + " / " + o.aportes_pendientes + "</td></tr>"
+      }).join("") + "</tbody>" : '<tbody><tr><td class="vacio-msg">No hay obras registradas.</td></tr></tbody>';
+    $("#seg-grafico").innerHTML = graficoBrechas(act);
+    var codigos = Object.keys(s.alertas_por_codigo), tot = codigos.reduce(function (a, c) { return a + s.alertas_por_codigo[c] }, 0);
+    $("#seg-alertas").innerHTML = codigos.length ? codigos.map(function (c) {
+      var n = s.alertas_por_codigo[c];
+      return barra(c, Math.round(n / tot * 100), "var(--al)", n) +
+        '<div class="mu" style="margin:-2px 0 8px 86px;font-size:12px">' + esc(ALERTAS[c] || "") + "</div>"
+    }).join("") : '<p class="vacio-msg">✅ Sin alertas activas.</p>';
+    $("#seg-historial").innerHTML = s.historial.length ? s.historial.map(function (h) { return filaHistorial(h, true) }).join("") + '<p class="mu" style="margin:6px 0 0">Fechas en UTC.</p>'
+      : '<p class="vacio-msg">Aún no hay cambios de estado registrados.</p>';
+  });
+}
+
+/* ---------- CLIMA ---------- */
+function enlacesExport() {
+  var p = $("#exp-proy").value;
+  $$("[data-exp]").forEach(function (a) { a.href = "/api/admin/clima/exportar/" + a.dataset.exp + ".csv" + (p ? "?proyecto=" + encodeURIComponent(p) : "") });
+}
+$("#exp-proy").onchange = enlacesExport;
+/* Precisión del pronóstico por fuente (necesita varios días de historial) y bitácora agrupada por "lote" (una corrida) */
+function cargarAnalisis() {
+  return Promise.all([api("/api/admin/clima/precision"), api("/api/admin/clima/ejecuciones?limite=60")]).then(function (x) {
+    var pr = x[0], ej = x[1];
+    $("#precision").innerHTML = pr.length ? '<div class="tabla"><table><thead><tr><th>Fuente</th><th class="num">Anticipación</th><th class="num">Casos</th><th class="num">Error medio</th><th class="num">Sesgo</th><th class="num">Acierto “apto”</th></tr></thead><tbody>' +
+      pr.map(function (r) { return "<tr><td>" + esc(r.fuente) + '</td><td class="num">' + r.anticipacion_dias + ' d</td><td class="num">' + r.comparaciones + '</td><td class="num">' + r.error_medio_mm + ' mm</td><td class="num">' + (r.sesgo_mm > 0 ? "+" : "") + r.sesgo_mm + ' mm</td><td class="num">' + (r.acierto_apto == null ? "—" : r.acierto_apto + "%") + "</td></tr>" }).join("") +
+      '</tbody></table></div><p class="mu" style="margin:6px 0 0">Sesgo positivo: la fuente pronostica más lluvia de la que hubo.</p>'
+      : '<p class="vacio-msg">Aún no hay suficiente historial: se necesitan pronósticos de días anteriores que ya tengan registro. Mejora con cada día de actualizaciones.</p>';
+    var lotes = {}; ej.forEach(function (e) { (lotes[e.lote] = lotes[e.lote] || []).push(e) });
+    $("#bitacora").innerHTML = ej.length ? '<div class="tabla" style="max-height:320px;overflow:auto"><table><thead><tr><th>Cuándo (UTC)</th><th>Origen</th><th>Obras</th><th>Fuentes</th><th class="num">Horas</th></tr></thead><tbody>' +
+      Object.keys(lotes).slice(0, 15).map(function (k) {
+        var l = lotes[k], fallos = l.filter(function (e) { return !e.ok }), obras = {}; l.forEach(function (e) { obras[e.project_id] = 1 });
+        return "<tr><td>" + esc(String(l[0].ejecutado).slice(0, 16)) + "</td><td>" + esc(l[0].origen) + "</td><td>" + Object.keys(obras).length + "</td><td>" +
+          (fallos.length ? '<span class="badge b-o" title="' + esc(fallos.map(function (e) { return e.project_id + " " + e.fuente + ": " + e.error }).join(" | ")) + '">' + (l.length - fallos.length) + "/" + l.length + " ok</span>" : '<span class="badge b-g">' + l.length + "/" + l.length + " ok</span>") +
+          '</td><td class="num">' + l.reduce(function (s, e) { return s + (e.horas || 0) }, 0) + "</td></tr>"
+      }).join("") + "</tbody></table></div>" : '<p class="vacio-msg">Sin actualizaciones registradas.</p>';
+  });
+}
+function cargarClima() {
+  return api("/api/admin/clima").then(function (c) {
+    var VAR = { google: "GOOGLE_MAPS_API_KEY", openmeteo: "OPEN_METEO_ACTIVO=1 (sin clave)", meteoblue: "METEOBLUE_API_KEY", meteosource: "METEOSOURCE_API_KEY" };
+    var P = c.proveedores, activos = P.filter(function (x) { return x.configurado });
+    $("#g-estado").innerHTML = '<div class="tabla"><table><thead><tr><th>Fuente</th><th>Estado</th><th>Historial</th><th>Variable</th></tr></thead><tbody>' + P.map(function (x) {
+      return "<tr><td><b>" + esc(x.etiqueta) + "</b></td><td>" + (x.configurado ? '<span class="badge b-g">Activa</span>' : '<span class="badge b-n">Sin configurar</span>') +
+        "</td><td>" + esc(x.historial) + '</td><td><code style="font-size:11px">' + esc(VAR[x.nombre] || "") + "</code></td></tr>" }).join("") + "</tbody></table></div>";
+    $("#g-actualizar").disabled = !activos.length;
+    $("#tabla-clima").innerHTML = "<thead><tr><th>Proyecto</th><th>Coordenadas</th>" + P.map(function (x) { return "<th class='num' title='Horas observadas guardadas · días de pronóstico'>" + esc(x.etiqueta) + "</th>" }).join("") +
+      "</tr></thead><tbody>" + c.proyectos.map(function (p) {
+        return "<tr><td><b>" + esc(p.nombre) + "</b></td><td>" + (p.ubicada ? '<span class="badge b-g">Sí</span>' : '<span class="badge b-r">Falta</span>') + "</td>" +
+          P.map(function (x) { var f = p.fuentes[x.nombre]; return '<td class="num" title="' + (f.ultima ? "Última hora: " + esc(f.ultima.replace("T", " ")) : "") + '">' + (f.horas || f.pronostico ? f.horas + " h · " + f.pronostico + " d" : "—") + "</td>" }).join("") +
+          "</tr>"
+      }).join("") + "</tbody>";
+    $("#clima-atrib").textContent = "Atribución: " + P.filter(function (x) { return x.configurado }).map(function (x) { return x.atribucion }).join(" ") +
+      " Open-Meteo, Meteoblue y Meteosource gratuitos son para uso no comercial: confirme las condiciones con cada proveedor antes de producción.";
+    var sel = $("#exp-proy"), actual = sel.value;
+    sel.innerHTML = '<option value="">Todas las obras</option>' + c.proyectos.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.nombre) + "</option>" }).join(""); sel.value = actual;
+    enlacesExport();
+    return cargarAnalisis();
+  });
+}
+$("#g-actualizar").onclick = function () {
+  var b = this; b.disabled = true; b.textContent = "Actualizando…"; $("#g-res").textContent = "";
+  api("/api/admin/clima/actualizar", { method: "POST" }).then(function (r) {
+    $("#g-res").innerHTML = r.map(function (x) {
+      return "<b>" + esc(x.proyecto) + "</b>: " + x.fuentes.map(function (f) { return esc(f.fuente) + " " + (f.ok ? "✓ " + f.horas + " h, " + f.pronostico + " d" : '<span style="color:var(--al)" title="' + esc(f.error) + '">✗ error</span>') }).join(" · ")
+    }).join("<br>");
+    return cargarClima();
+  }).catch(function (e) { $("#g-res").textContent = e.message }).then(function () { b.disabled = false; b.textContent = "↻ Actualizar ahora" });
+};
+/* ---------- REPORTES ---------- */
+/* Frecuencia del reporte por persona, calendario y plantilla del PDF (src/reporteria.py y src/reporte_pdf.py).
+   Los envíos automáticos los hace la tarea diaria enviar_reportes.py; aquí también se pueden disparar a mano. */
+var FREC = { ninguno: "No recibir", diario: "Diario", semanal: "Resumen semanal", quincenal: "Resumen quincenal" };
+var EST_ENVIO = { enviado: ["Enviado", "b-g"], simulado: ["Simulado", "b-b"], error: ["Error", "b-r"], omitido: ["Omitido", "b-n"] };
+function selFrec(actual) { return Object.keys(FREC).map(function (k) { return '<option value="' + k + '"' + (k === actual ? " selected" : "") + ">" + FREC[k] + "</option>" }).join("") }
+/* Formulario "Calendario de envío y plantilla del reporte" (tabla configuracion). El logo se sube aparte (multipart). */
+function cargarAjustes() {
+  return api("/api/admin/reportes/ajustes").then(function (a) {
+    $("#aj-dia").value = a.dia_semanal; $("#aj-q1").value = a.dias_quincenal[0]; $("#aj-q2").value = a.dias_quincenal[1];
+    $("#aj-hora").innerHTML = Array.apply(null, Array(24)).map(function (_, h) { return '<option value="' + h + '">' + (h < 10 ? "0" : "") + h + ":00</option>" }).join("");
+    $("#aj-hora").value = a.hora;
+    $("#aj-inst").value = a.institucion; $("#aj-unidad").value = a.unidad; $("#aj-color").value = a.color; $("#aj-pie").value = a.pie;
+    $("#aj-logo-img").classList.toggle("hide", !a.logo); $("#aj-logo-quitar").classList.toggle("hide", !a.logo);
+    if (a.logo) $("#aj-logo-img").src = "/api/admin/reportes/logo?t=" + Date.now();
+  });
+}
+$("#f-ajustes").onsubmit = function (e) {
+  e.preventDefault(); $("#aj-err").textContent = "";
+  var datos = { dia_semanal: +$("#aj-dia").value, dias_quincenal: [+$("#aj-q1").value, +$("#aj-q2").value], hora: +$("#aj-hora").value, institucion: $("#aj-inst").value,
+    unidad: $("#aj-unidad").value, color: $("#aj-color").value, pie: $("#aj-pie").value };
+  var archivo = $("#aj-logo").files[0];
+  api("/api/admin/reportes/ajustes", { method: "PUT", json: datos }).then(function () {
+    if (!archivo) return;
+    var f = new FormData(); f.append("archivo", archivo); return api("/api/admin/reportes/logo", { method: "POST", body: f });
+  }).then(function () { toast("✅ Configuración guardada"); $("#aj-logo").value = ""; return Promise.all([cargarAjustes(), cargarReportes()]) })
+    .catch(function (x) { $("#aj-err").textContent = x.message });
+};
+$("#aj-logo-quitar").onclick = function () {
+  if (!confirm("¿Quitar el logo de la plantilla?")) return;
+  api("/api/admin/reportes/logo", { method: "DELETE" }).then(function () { toast("Logo quitado"); cargarAjustes() }).catch(function (x) { toast(x.message) });
+};
+
+/* Estado de correo y calendario, tabla de personas (frecuencia, próximo envío, vista previa, enviar) e historial */
+function cargarReportes() {
+  return Promise.all([api("/api/admin/reportes/estado"), api("/api/admin/reportes/envios?limite=40")]).then(function (x) {
+    var e = x[0], H = x[1];
+    /* Tres bloques: servidor de correo, calendario y envío automático (src/programador.py) */
+    var g = e.automatico, s = e.smtp_info, hh = (e.hora < 10 ? "0" : "") + e.hora + ":00";
+    $("#rep-config").innerHTML = '<div class="fila" style="gap:16px;align-items:flex-start">' +
+      '<div class="c"><b>Correo</b><br>' + (e.smtp ? '<span class="badge b-g">Configurado</span> <span class="mu">' + esc(s.host) + ":" + s.puerto + " (" + esc(s.seguridad) + ") · remitente " + esc(s.remitente) + "</span>"
+        : '<span class="badge b-b">Modo simulado</span> <span class="mu">Sin servidor de correo: los PDF se generan y guardan, pero no se envían. Configure SMTP_* en <code>diara/.env</code> y reinicie el servidor.</span>') + "</div>" +
+      '<div class="c"><b>Calendario</b><br><span class="mu">Desde las ' + hh + " · Diario: todos los días (día anterior) · Semanal: cada " + esc(e.dia_semanal) +
+        " (7 días anteriores) · Quincenal: días " + e.dias_quincenal.join(" y ") + " de cada mes (quincena anterior)</span></div>" +
+      '<div class="c"><b>Envío automático</b><br>' + (g.activo && g.corriendo ? '<span class="badge b-g">Activo</span> <span class="mu">El servidor revisa cada ' + g.intervalo_min + " min y envía desde las " + hh + "."
+        : g.activo ? '<span class="badge b-o">Detenido</span> <span class="mu">El programador no está corriendo: reinicie el servidor.'
+        : '<span class="badge b-n">Apagado</span> <span class="mu">REPORTES_AUTOMATICOS=0: programe <code>tareas/enviar_reportes.bat</code> una vez al día.') +
+        (g.ultima ? " Última revisión: " + esc(g.ultima.replace("T", " ")) + " (" + esc(g.resultado || "") + ")." : " Aún sin revisiones hoy.") +
+        (e.pendientes ? " <b>" + e.pendientes + " reporte(s) pendiente(s).</b>" : "") + "</span></div></div>";
+    $("#rep-personas").innerHTML = "<thead><tr><th>Persona</th><th>Frecuencia del reporte</th><th class='num'>Proyectos</th><th>Próximo envío</th><th>Último envío</th><th></th></tr></thead><tbody>" +
+      e.personas.map(function (p) {
+        var f = p.frecuencia, puede = p.proyectos > 0 && p.activo;
+        return "<tr><td><b>" + esc(p.nombre) + '</b><br><span class="mu">' + esc(p.correo) + (p.rol === "admin" ? " · administrador (todas las obras)" : "") + (S.yo && p.id === S.yo.id ? " · <b>usted</b>" : "") + (p.activo ? "" : " · inactivo") + "</span></td>" +
+          '<td><select data-frec="' + p.id + '" aria-label="Frecuencia del reporte de ' + esc(p.nombre) + '" style="width:auto">' + selFrec(f) + "</select></td>" +
+          '<td class="num">' + p.proyectos + "</td><td>" + (p.proximo ? "<b>" + diaSemana(p.proximo) + " " + fmtFecha(p.proximo) + '</b><br><span class="mu">' + esc(p.proximo_periodo) + "</span>" : '<span class="mu">—</span>') + "</td>" +
+          "<td>" + (p.ultimo ? esc(String(p.ultimo).slice(0, 16)) + ' <span class="mu">UTC</span>' : '<span class="mu">Nunca</span>') + "</td>" +
+          '<td class="num">' + (puede ? '<a class="btn sm" target="_blank" rel="noopener" href="/api/admin/reportes/vista-previa/' + p.id + ".pdf?frecuencia=" + (f === "ninguno" ? "semanal" : f) + '" title="Vista previa del PDF que recibiría hoy">👁 Ver</a> ' +
+            '<button class="sm" data-enviar="' + p.id + '" data-f="' + (f === "ninguno" ? "semanal" : f) + '" title="Enviar ahora por correo">✉ Enviar</button>' : '<span class="mu">' + (p.activo ? "Sin proyectos" : "Inactivo") + "</span>") + "</td></tr>"
+      }).join("") + "</tbody>";
+    $$("[data-frec]").forEach(function (s) {
+      s.onchange = function () {
+        api("/api/admin/usuarios/" + s.dataset.frec, { method: "PATCH", json: { frecuencia: s.value } })
+          .then(function () { toast("✅ Frecuencia actualizada: " + FREC[s.value]); cargarReportes() }).catch(function (x) { toast(x.message) });
+      };
+    });
+    $$("[data-enviar]").forEach(function (b) {
+      b.onclick = function () {
+        if (!confirm("¿Enviar ahora el " + FREC[b.dataset.f].toLowerCase() + " a esta persona?")) return;
+        b.disabled = true; b.textContent = "Generando…";
+        api("/api/admin/reportes/enviar/" + b.dataset.enviar + "?frecuencia=" + b.dataset.f, { method: "POST" })
+          .then(function (r) { toast((r.estado === "error" ? "❌ " : "✅ ") + (EST_ENVIO[r.estado] || [r.estado])[0] + ": " + r.detalle); cargarReportes() })
+          .catch(function (x) { toast(x.message); b.disabled = false; b.textContent = "✉ Enviar" });
+      };
+    });
+    $("#rep-historial").innerHTML = H.length ? "<thead><tr><th>Cuándo (UTC)</th><th>Persona</th><th>Reporte</th><th>Período</th><th>Estado</th><th>Origen</th><th></th></tr></thead><tbody>" +
+      H.map(function (h) {
+        var es = EST_ENVIO[h.estado] || [h.estado, "b-n"];
+        return "<tr><td>" + esc(String(h.creado).slice(0, 16)) + "</td><td>" + esc(h.nombre || h.correo) + '<br><span class="mu">' + esc(h.correo) + "</span></td><td>" + esc(FREC[h.frecuencia] || h.frecuencia) +
+          "</td><td>" + fmtFecha(h.desde) + (h.desde !== h.hasta ? " – " + fmtFecha(h.hasta) : "") + '</td><td><span class="badge ' + es[1] + '">' + es[0] + "</span>" +
+          (h.error ? '<div class="mu" style="font-size:12px;max-width:340px;color:var(--al)">' + esc(h.error) + "</div>" : "") + "</td><td>" + esc(h.origen) +
+          '</td><td class="num">' + (h.archivo ? '<a class="link" target="_blank" rel="noopener" href="/api/admin/reportes/archivo/' + h.id + '">PDF</a>' : "") + "</td></tr>"
+      }).join("") + "</tbody>" : '<tbody><tr><td class="vacio-msg">Aún no se ha enviado ningún reporte.</td></tr></tbody>';
+  });
+}
+$("#rep-ejecutar").onclick = function () {
+  var b = this; b.disabled = true; b.textContent = "Ejecutando…";
+  api("/api/admin/reportes/ejecutar", { method: "POST" }).then(function (r) {
+    $("#rep-res").innerHTML = r.length ? r.map(function (x) { return esc(x.correo) + " · " + esc(FREC[x.frecuencia]) + ": <b>" + (EST_ENVIO[x.estado] || [x.estado])[0] + "</b> — " + esc(x.detalle) }).join("<br>")
+      : "No hay reportes pendientes: todo lo que corresponde según el calendario ya se envió.";
+    return cargarReportes();
+  }).catch(function (x) { toast(x.message) }).then(function () { b.disabled = false; b.textContent = "▶ Enviar pendientes ahora" });
+};
+/* Correo de prueba: verifica la configuración SMTP sin enviar reportes; si falla, el servidor explica la causa */
+$("#rep-prueba").onclick = function () {
+  abrirModal("<h2>Correo de prueba</h2><p class='mu' style='margin-top:0'>Envía un mensaje corto para comprobar que el servidor de correo está bien configurado.</p>" +
+    '<label for="m-dest">Enviar a</label><input id="m-dest" type="email" value="' + esc(S.yo ? S.yo.correo : "") + '">' +
+    '<p class="err" id="m-err"></p><p style="margin:10px 0 0"><button class="pri" id="m-ok">Enviar prueba</button> <button data-cerrar>Cerrar</button></p>', true);
+  $("#m-ok").onclick = function () {
+    var b = this; b.disabled = true; b.textContent = "Enviando…"; $("#m-err").textContent = "";
+    api("/api/admin/reportes/probar-correo", { json: { destino: $("#m-dest").value } })
+      .then(function (r) { cerrarModal(); toast("✅ Correo de prueba enviado a " + r.destino + ". Revise la bandeja (y el correo no deseado).") })
+      .catch(function (x) { $("#m-err").textContent = x.message }).then(function () { b.disabled = false; b.textContent = "Enviar prueba" });
+  };
+};
+
+/* ---------- carga ---------- */
+/* Recarga y repinta todas las secciones. Se llama al iniciar y después de cada cambio. */
+/* Aviso visible (no solo un toast) cuando la API falla: así una página vacía nunca pasa inadvertida.
+   Causas típicas: la página se abrió como archivo o con otro servidor (Live Server), o uvicorn quedó con código viejo. */
+function avisoError(e) {
+  if (e && e.message === "sesion") return;
+  var a = $("#aviso-error");
+  a.innerHTML = "<h3>⚠️ No se pudieron cargar los datos</h3><p style='margin:0 0 6px'>Detalle: <code>" + esc(e && e.message || String(e)) + "</code></p>" +
+    "<p class='mu' style='margin:0'>Verifique que el servidor esté corriendo (<code>uvicorn api:app --app-dir backend --port 8000</code>) y abra la página desde " +
+    "<code>http://localhost:8000/login</code>, no como archivo ni con otro servidor. Si acaba de actualizar el sistema, reinicie uvicorn y recargue con Ctrl+F5.</p>" +
+    '<p style="margin:8px 0 0"><button class="sm" onclick="location.reload()">↻ Reintentar</button></p>';
+  a.classList.remove("hide");
+}
+function cargar() {
+  return Promise.all([api("/api/admin/proyectos"), api("/api/admin/usuarios")]).then(function (x) {
+    $("#aviso-error").classList.add("hide");
+    S.proyectos = x[0]; S.usuarios = x[1]; pintarResumen(); pintarProyectos(); pintarUsuarios(); pintarContratistas();
+    /* Las secciones que se cargan aparte no bloquean el resto: si una falla, se avisa y las demás siguen */
+    [cargarSeguimiento, cargarReportes, cargarAjustes, cargarClima].forEach(function (f) { f().catch(avisoError) });
+  }).catch(avisoError);
+}
+/* Arranque: usuario actual, catálogos del formulario (provincias, estados, transiciones) y luego todo el panel; al final se activa el menú */
+api("/api/yo").then(function (yo) {
+  $("#usuario").textContent = yo.nombre || yo.correo; $("#usuario").title = yo.correo;
+  return Promise.all([api("/api/admin/usuarios"), api("/api/admin/catalogos")]).then(function (x) { S.yo = x[0].filter(function (u) { return u.correo === yo.correo })[0]; CAT = x[1]; return cargar() });
+}).then(function () { seguirScroll() }).catch(avisoError);
+</script>
+</body>
+</html>

@@ -1,0 +1,3 @@
+project_id,nombre,ubicacion,institucion,estado,camara,cronograma,lat,lng
+P-001,Escuela Limoncito,"Limón, Limón",MEP,En ejecución,DIA-0142,v3 (02-sep-2026),9.9795,-83.0408
+P-002,Ruta cantonal Paraíso (ejemplo),"Paraíso, Cartago",Municipalidad,En ejecución,DIA-0157,v2 (20-ago-2026),9.8383,-83.8656

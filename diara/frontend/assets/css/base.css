@@ -1,0 +1,63 @@
+/* Estilos compartidos por todas las páginas de dIAra
+   Se carga primero en todas las páginas; luego cada una agrega landing.css (sitio público) o panel.css (paneles).
+   Sin frameworks: CSS propio, con variables (custom properties) para los colores. */
+
+/* ---------- Colores (tokens) ----------
+   --bg fondo · --card tarjetas · --tx texto · --mu texto secundario · --bd bordes · --pr color principal
+   --prt principal tenue · --ok verde · --al rojo (alerta) · --cl azul (lluvia) · --wa ámbar · --btx texto sobre --pr
+   Modo oscuro: se aplica según la preferencia del sistema, salvo que la página fuerce data-theme="light" o "dark". */
+:root{--bg:#f4f6f8;--card:#fff;--tx:#14202b;--mu:#5b6b7a;--bd:#dde3e9;--pr:#0b5cab;--prt:#e6f0fa;--ok:#2e9e5b;--al:#d64545;--cl:#2f7fd1;--wa:#e0a100;--btx:#fff;
+  box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f161d;--card:#18222c;--tx:#e8eef3;--mu:#93a4b3;--bd:#2a3744;--pr:#5aa3ea;--prt:#1b2d41;--btx:#071522}}
+:root[data-theme="dark"]{--bg:#0f161d;--card:#18222c;--tx:#e8eef3;--mu:#93a4b3;--bd:#2a3744;--pr:#5aa3ea;--prt:#1b2d41;--btx:#071522}
+
+/* ---------- Base ---------- */
+html{scroll-padding-top:calc(70px + env(safe-area-inset-top,0px));scroll-behavior:smooth} /* los anclas (#seccion) no quedan bajo el encabezado fijo */
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+/* Celulares con muesca: franja del color del encabezado en la zona segura superior */
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:var(--card);z-index:30}
+:focus-visible{outline:2px solid var(--pr);outline-offset:2px} /* foco visible al navegar con teclado (accesibilidad) */
+
+/* ---------- Encabezado y navegación ---------- */
+header{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--card);border-bottom:1px solid var(--bd);display:flex;gap:12px;align-items:center;padding:10px 16px;flex-wrap:wrap}
+.logo{font-weight:800;font-size:20px;color:var(--pr);text-decoration:none}.logo span{color:var(--tx)}
+.grow{flex:1} /* separador flexible: empuja lo siguiente a la derecha */
+nav{display:flex;gap:4px;background:var(--bg);padding:3px;border-radius:12px;border:1px solid var(--bd);overflow-x:auto;max-width:100%}
+nav a{color:var(--tx);text-decoration:none;padding:7px 12px;border-radius:9px;white-space:nowrap}nav a:hover{background:var(--prt)}
+nav a.on{background:var(--pr);color:var(--btx)}
+
+/* ---------- Estructura y utilidades ---------- */
+main{max-width:1200px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:16px}
+h1{margin:0 0 8px}h2{margin:0 0 8px;font-size:17px}h3{margin:0 0 6px;font-size:15px}
+.mu{color:var(--mu);font-size:13px}   /* texto secundario */
+.sec{margin-top:16px}.sec>h2{font-size:20px;margin:0 0 4px}
+.hide{display:none!important}           /* JS oculta/muestra elementos con esta clase */
+.chip{background:var(--prt);color:var(--pr);padding:3px 9px;border-radius:99px;font-size:12px;font-weight:600;display:inline-block}
+
+/* ---------- Formularios y botones ---------- */
+input,select,textarea{font:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--bd);border-radius:10px;padding:9px 12px;width:100%}
+textarea{resize:vertical;min-height:84px}
+label{display:block;font-size:13px;color:var(--mu);margin:10px 0 4px}
+button,.btn{font:inherit;cursor:pointer;border-radius:10px;border:1px solid var(--bd);background:var(--card);color:var(--tx);padding:9px 14px;text-decoration:none;display:inline-block}
+button:disabled{opacity:.5;cursor:not-allowed}
+.pri{background:var(--pr);color:var(--btx);border-color:var(--pr);font-weight:600} /* botón principal */
+.sm{padding:5px 10px;font-size:13px}                                                  /* botón pequeño */
+
+/* ---------- Etiquetas de estado (badges) ----------
+   b-r rojo (alerta/atraso) · b-o ámbar (revisar) · b-g verde (bien) · b-b azul (lluvia/info) · b-n neutro */
+.badge{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;font-weight:600}
+.b-r{background:#d6454530;color:var(--al)}.b-o{background:#e0a10030;color:var(--wa)}.b-g{background:#2e9e5b30;color:var(--ok)}
+.b-b{background:#2f7fd130;color:var(--cl)}.b-n{background:var(--bg);color:var(--mu);border:1px solid var(--bd)}
+
+/* ---------- Gráficos SVG y leyendas (common.js: graficoAvance) ---------- */
+.chart{width:100%;height:auto;display:block;max-height:340px}
+.leg{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;margin-top:8px;color:var(--mu)}.leg i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+
+/* ---------- Ventana emergente y aviso flotante (toast) ---------- */
+.modal{position:fixed;inset:0;background:#0008;z-index:40;display:none;align-items:center;justify-content:center;padding:16px}
+.modal.on{display:flex}.modal>.card{max-width:640px;width:100%;max-height:90vh;overflow:auto}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--tx);color:var(--bg);padding:10px 16px;border-radius:10px;opacity:0;pointer-events:none;transition:.25s;z-index:50;max-width:90vw}
+.toast.on{opacity:1}
+footer{text-align:center;color:var(--mu);font-size:12px;padding:24px 16px}

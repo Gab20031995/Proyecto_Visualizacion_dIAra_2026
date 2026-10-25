@@ -1,0 +1,60 @@
+/* Estilos compartidos por los paneles (auditor y administración)
+   Lo usan auditor.html (Home del auditor), proyecto.html (panel de un proyecto) y admin.html.
+   Se carga después de base.css. Los estilos propios de cada panel están en un <style> dentro de su HTML. */
+
+/* ---------- Encabezado del panel ---------- */
+body{--cab:57px} /* alto del encabezado; panel.js lo recalcula (en móvil puede ocupar dos líneas) */
+header .usuario{font-size:13px;color:var(--mu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+header select{width:auto;max-width:280px;padding:6px 10px;font-weight:600}
+@media(max-width:560px){header .usuario{display:none}header select{max-width:190px}header{gap:8px}}
+
+/* Menú de secciones: sencillo, sigue el scroll */
+/* Queda fijo justo debajo del encabezado; panel.js (seguirScroll) marca con .on la sección visible */
+.subnav{position:sticky;top:calc(var(--cab) + env(safe-area-inset-top,0px));z-index:15;background:var(--card);border-bottom:1px solid var(--bd)}
+.subnav .in{max-width:1200px;margin:0 auto;padding:0 16px;display:flex;gap:2px;overflow-x:auto;scrollbar-width:none}
+.subnav .in::-webkit-scrollbar{display:none}
+.subnav a{color:var(--mu);text-decoration:none;padding:11px 12px 9px;border-bottom:2px solid transparent;white-space:nowrap;font-size:14px}
+.subnav a:hover{color:var(--tx)}
+.subnav a.on{color:var(--pr);border-bottom-color:var(--pr);font-weight:600}
+
+/* Secciones apiladas (el margen de scroll lo da cada sección; se anula el de base.css para no sumarlos) */
+/* Si se cambia la altura del menú, ajustar el 48px: el menú detecta la sección a 40px bajo su borde inferior */
+html{scroll-padding-top:0}
+.bloque{scroll-margin-top:calc(var(--cab) + 48px);padding-top:20px}
+.bloque + .bloque{margin-top:12px;border-top:1px solid var(--bd)}
+.bloque>.tit{display:flex;gap:12px;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;margin-bottom:12px}
+.bloque>.tit h2{font-size:20px;margin:0}
+.bloque>.tit p{margin:2px 0 0}
+
+/* ---------- Rejillas e indicadores (KPI) ---------- */
+.grid{display:grid;gap:12px}
+/* min-width:0 evita que una tabla o un texto largo ensanche la columna y genere scroll horizontal en móvil */
+.grid>*{min-width:0}.card code{overflow-wrap:anywhere}
+.g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:repeat(3,1fr)}
+.kpis{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.kpi{padding:12px 14px}
+.kpi b{display:block;font-size:22px;color:var(--tx);font-variant-numeric:tabular-nums;line-height:1.2}
+.kpi.mal b{color:var(--al)}.kpi.bien b{color:var(--ok)} /* panel.js: kpi(texto, valor, "mal" | "bien") */
+@media(max-width:900px){.g2,.g3{grid-template-columns:1fr}}
+
+/* ---------- Utilidades ---------- */
+.vacio-msg{color:var(--mu);font-size:14px;padding:12px 0} /* mensaje de "sin datos" */
+.fila{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.fila>.c{flex:1;min-width:160px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip-u{background:var(--prt);color:var(--pr);border-radius:99px;padding:2px 10px;font-size:12px;font-weight:600}
+.chip-u.off{background:var(--bg);color:var(--mu);text-decoration:line-through} /* usuario inactivo */
+a.link{color:var(--pr);font-weight:600;text-decoration:none}a.link:hover{text-decoration:underline}
+
+/* ---------- Tablas (con desplazamiento horizontal propio en pantallas angostas) ---------- */
+.tabla{overflow-x:auto;border:1px solid var(--bd);border-radius:12px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
+th,td{padding:8px 10px;border-bottom:1px solid var(--bd);text-align:left;white-space:nowrap;vertical-align:middle}
+th{background:var(--bg);color:var(--mu);font-weight:600}
+tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right} /* columnas numéricas alineadas a la derecha */
+
+/* ---------- Casillas de verificación en listas (asignación de auditores/proyectos) y errores de formulario ---------- */
+.check{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--bd);color:var(--tx);margin:0;font-size:14px}
+.check input{width:auto}
+.err{color:var(--al);font-size:13px;min-height:18px;margin:6px 0 0}

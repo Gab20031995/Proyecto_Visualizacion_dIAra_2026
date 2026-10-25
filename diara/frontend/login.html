@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<!--
+  Página de acceso (ruta /login). La misma para auditores, administradores y empresas ejecutoras: el servidor decide a dónde ir según el rol.
+  Lógica en assets/js/login.js · API: POST /api/login (backend/routes/sesion.py).
+  Si ya hay sesión, el backend redirige directo al panel sin mostrar esta página.
+-->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>dIAra · Acceso</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%230b5cab%22/%3E%3Ctext x=%2216%22 y=%2222%22 font-size=%2215%22 font-family=%22sans-serif%22 font-weight=%22700%22 fill=%22white%22 text-anchor=%22middle%22%3EIA%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/css/base.css">
+<style>
+.login{max-width:420px;margin:7vh auto 0}
+.login .card{padding:24px}
+.err{color:var(--al);font-size:13px;min-height:20px;margin:8px 0 0}
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="/" id="ir-inicio">d<span>IA</span>ra</a>
+  <span class="grow"></span>
+  <a class="btn" href="/" id="ir-inicio2">← Volver al sitio</a>
+</header>
+<main>
+  <div class="login">
+    <form class="card" id="f" novalidate>
+      <span class="chip">Acceso restringido</span>
+      <h1 style="font-size:22px;margin-top:10px">🔐 Acceso CGR</h1>
+      <p class="mu" style="margin-top:0">Auditores, administradores y empresas ejecutoras ingresan con su correo. Cada persona ve los proyectos que tiene asignados.</p>
+      <label for="em">Correo institucional</label>
+      <input id="em" type="email" placeholder="nombre@cgr.go.cr" autocomplete="username" required>
+      <label for="pw">Contraseña</label>
+      <input id="pw" type="password" autocomplete="current-password" required>
+      <!-- Mensajes de error (role="alert": los lectores de pantalla los anuncian) -->
+      <p class="err" id="err" role="alert"></p>
+      <button class="pri" type="submit" id="btn" style="width:100%">Ingresar al panel</button>
+      <p class="mu" style="margin:14px 0 0">La sesión se cierra automáticamente después de 8 horas.</p>
+    </form>
+  </div>
+</main>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="assets/js/common.js"></script>
+<script src="assets/js/login.js"></script>
+</body>
+</html>

@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<!--
+  Panel de un proyecto (ruta /proyecto?p=ID). Lo usan auditores (solo sus proyectos asignados) y administradores (todos).
+  Una sola página con scroll; el menú de arriba (.subnav) marca la sección visible (panel.js: seguirScroll).
+  Secciones: Resumen · Imágenes · Empresa ejecutora · Clima · Calendario y observaciones · Registros · Aportes ciudadanos.
+  Las observaciones del auditor se anotan y consultan desde el calendario en ventanas emergentes (formObs, listaObs).
+  Para no saturar la vista: Imágenes está plegada (plegar()), el calendario muestra un mes a la vez,
+  el detalle del día muestra una foto a la vez (visor) y Registros muestra los últimos 7 días (con botones para ver más).
+  "Empresa ejecutora" muestra lo que DECLARA el contratista (cronograma, bitácora, costos) cruzado con lo que OBSERVA la IA
+  (GET /api/auditor/{pid}/contratista; reglas en backend/src/contratista.py).
+  API: /api/auditor/{pid}/... (backend/routes/auditor.py); permisos validados en el servidor.
+  Si la obra aún no tiene registro diario de la IA, se usa modoSinDatos(): se ocultan Resumen, Calendario y Registros.
+  Estilos: base.css + panel.css + el bloque style de abajo. Lógica: el bloque script al final de la página.
+-->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>dIAra · Proyecto</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%230b5cab%22/%3E%3Ctext x=%2216%22 y=%2222%22 font-size=%2215%22 font-family=%22sans-serif%22 font-weight=%22700%22 fill=%22white%22 text-anchor=%22middle%22%3EIA%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/css/base.css">
+<link rel="stylesheet" href="assets/css/panel.css">
+<style>
+/* ---------- Panel del auditor ---------- */
+/* Estilos propios de esta página (los compartidos están en panel.css). .st-* = colores de los días del calendario,
+   en el mismo orden que ESTADOS en el script. */
+.estado-obra{display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.estado-obra .frase{font-size:17px;margin:6px 0 0;max-width:720px}
+.ia{margin:0;padding-left:18px}.ia li{margin-bottom:6px}
+.alerta{border-left:4px solid var(--wa);padding:8px 12px;border-radius:8px;background:var(--bg);margin-top:8px;font-size:14px}
+.alerta.ALTA{border-color:var(--al)}
+
+.galeria{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+.tira{grid-template-columns:repeat(4,1fr)}
+@media(max-width:900px){.tira{grid-template-columns:repeat(2,1fr)}}
+.foto{padding:0;overflow:hidden}
+.foto img{width:100%;aspect-ratio:16/10;object-fit:cover;display:block;cursor:zoom-in;background:var(--bd)}
+.foto .pie{padding:8px 10px;font-size:13px}
+.det{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
+
+/* Día del calendario con observaciones: punto abajo a la derecha */
+.dia{position:relative}.dia.con-obs::after{content:"";position:absolute;right:5px;bottom:5px;width:7px;height:7px;border-radius:50%;background:var(--pr)}
+/* Ventanas de observaciones (formObs, listaObs) */
+.obs-foto{display:flex;gap:10px;align-items:center;margin:4px 0 6px}.obs-foto img{width:120px;border-radius:8px}
+/* Secciones plegables (Imágenes): !important porque .grid/.galeria fijan display y anularían [hidden] */
+.cuerpo[hidden]{display:none!important}
+/* Calendario de un mes con navegación */
+.cal-nav{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:12px}
+.cal-nav select{width:auto;flex:1;text-align:center;text-transform:capitalize;font-weight:600}
+.cal-nav button:disabled{opacity:.35;cursor:default}
+/* Visor del día: una foto a la vez, con ◀ ▶ y barra para recorrer las horas */
+.visor .foto img{aspect-ratio:4/3}
+.visor-ctl{display:flex;gap:8px;align-items:center;margin-top:8px}
+.visor-ctl input[type=range]{flex:1;padding:0;accent-color:var(--pr)}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.cal .dow{font-size:11px;color:var(--mu);text-align:center}
+.dia{aspect-ratio:1;border-radius:8px;border:1px solid var(--bd);display:flex;align-items:center;justify-content:center;font-size:13px;background:var(--card);color:var(--tx);padding:0}
+.dia.vacio{border:0;background:none}
+.dia.fuera{opacity:.35}
+.dia.sel{outline:2px solid var(--tx);outline-offset:1px}
+.st-activo{background:#2e9e5b2e;border-color:#2e9e5b80}.st-inactivo{background:#d645452e;border-color:#d6454580}
+.st-lluvia{background:#2f7fd12e;border-color:#2f7fd180}.st-revisar{background:#e0a1002e;border-color:#e0a10080}
+.st-sin{background:var(--bg);color:var(--mu)}
+#dia-det{align-self:start}  /* altura propia, no la de la tarjeta del calendario */
+.st-sindet{background:#8a94a02e;border-color:#8a94a080}
+.st-noapta{background:repeating-linear-gradient(45deg,#e0a1002e 0 4px,transparent 4px 8px);border-color:#e0a10080}
+.sw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:4px;border:1px solid var(--bd)}
+tr.click{cursor:pointer}tr.click:hover td{background:var(--prt)}
+/* Empresa ejecutora: filas de la bitácora que contradicen a la IA */
+tr.contradice td{background:#d645450f}
+.motivo{color:var(--al);font-size:12px;display:block}
+.cmp{font-variant-numeric:tabular-nums;white-space:nowrap}
+
+.obs-item{border-top:1px solid var(--bd);padding:12px 0}.obs-item:first-child{border-top:0;padding-top:0}
+.obs-item img{width:110px;border-radius:8px;float:right;margin-left:10px;cursor:zoom-in}
+.obs-item select{width:auto;padding:5px 8px;font-size:13px}
+.modal img.grande{width:100%;border-radius:10px;display:block}
+.sin-datos{text-align:center;padding:48px 16px}
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="#resumen">d<span>IA</span>ra</a>
+  <a class="btn sm" id="volver" href="/auditor">← Mis proyectos</a>
+  <span id="obra-sel"></span>
+  <span class="grow"></span>
+  <span class="usuario" id="usuario"></span>
+  <button class="sm" id="salir">Salir</button>
+</header>
+<div class="subnav" role="navigation" aria-label="Secciones del panel"><div class="in">
+  <a href="#resumen">Resumen</a><a href="#imagenes">Imágenes</a><a href="#empresa">Empresa ejecutora</a><a href="#clima">Clima</a>
+  <a href="#calendario">Calendario y observaciones</a><a href="#registros">Registros</a><a href="#aportes">Aportes ciudadanos</a>
+</div></div>
+
+<main id="contenido">
+  <!-- RESUMEN -->
+  <section class="bloque" id="resumen">
+    <div class="card estado-obra">
+      <div><span id="estado"></span><p class="frase" id="frase">Cargando…</p><div class="mu" id="obra-meta"></div></div>
+      <div class="fila"><button id="nueva-obs">📝 Nueva observación</button><a class="btn pri" id="dl-pdf">⬇ Reporte PDF</a></div>
+    </div>
+    <div class="kpis sec" id="kpis"></div>
+    <div class="tit sec" style="margin-bottom:8px"><h3 style="margin:0">Últimas imágenes de la cámara</h3><a class="link" href="#imagenes">Ver todas ↓</a></div>
+    <div class="galeria tira" id="ultimas"></div>
+    <div class="grid g2 sec">
+      <div class="card"><h3>🤖 Resumen de la IA</h3><ul class="ia" id="ia"></ul>
+        <p class="mu" style="margin:10px 0 0">Generado a partir de las detecciones, el cronograma y el clima. Es un apoyo: valide con las imágenes.</p></div>
+      <div class="card"><h3>Avance previsto vs. observado</h3><div id="graf"></div></div>
+    </div>
+    <div class="card sec"><h3>Alertas activas</h3><div id="alertas"></div>
+      <p class="mu" style="margin:8px 0 0">Una alerta indica necesidad de revisión, no prueba automática de incumplimiento.</p></div>
+  </section>
+
+  <!-- IMÁGENES -->
+  <!-- Plegada por defecto (son muchas fotos): se despliega con el botón o al llegar desde un enlace (ver plegar()) -->
+  <section class="bloque" id="imagenes">
+    <div class="tit"><div><h2>Imágenes <span class="mu" id="img-n"></span></h2><p class="mu">Capturas de la cámara con las detecciones de la IA. Recuadro rojo = confianza baja.</p></div>
+      <button class="sm" data-plegar="imagenes" aria-expanded="false" aria-controls="img-cuerpo">Mostrar ▾</button></div>
+    <div class="cuerpo" id="img-cuerpo" hidden><div class="galeria" id="galeria"></div></div>
+  </section>
+
+  <!-- Las OBSERVACIONES no tienen sección propia: se registran y consultan desde el calendario en ventanas emergentes
+       (formObs() y listaObs() en el script), porque cada observación pertenece a un día de evidencia. -->
+
+  <!-- EMPRESA EJECUTORA: lo que declara el contratista frente a lo que observa la IA -->
+  <section class="bloque" id="empresa">
+    <div class="tit"><div><h2>Empresa ejecutora</h2><p class="mu" id="e-meta">Cronograma, bitácora y costos que carga el contratista, comparados con lo que registra la cámara y el clima real.</p></div></div>
+    <div class="kpis" id="e-kpis"></div>
+    <div class="grid g2 sec">
+      <div class="card"><h3>Avance: planificado, reportado y observado</h3><div id="e-graf"></div></div>
+      <div class="card"><h3>Contradicciones detectadas</h3><div id="e-alertas"></div>
+        <p class="mu" style="margin:8px 0 0">Indican qué revisar o qué solicitar a la empresa; no prueban por sí solas un incumplimiento.</p></div>
+    </div>
+    <h3 class="sec">Bitácora frente a la IA, día a día</h3>
+    <p class="mu" style="margin:0 0 8px">En rojo los días en que lo declarado no coincide con lo observado. Clic en una fila para ver ese día en el calendario.</p>
+    <div class="tabla"><table id="e-dias"></table></div>
+    <details class="sec"><summary style="cursor:pointer;font-weight:600">Bitácora completa <span class="mu" id="e-nbit"></span></summary><div id="e-bit" style="margin-top:8px"></div></details>
+    <details class="sec"><summary style="cursor:pointer;font-weight:600">Costos y presupuesto <span class="mu" id="e-ncost"></span></summary><div id="e-costos" style="margin-top:8px"></div></details>
+    <details class="sec"><summary style="cursor:pointer;font-weight:600">Cronograma de la empresa <span class="mu" id="e-ncrono"></span></summary><div id="e-crono" style="margin-top:8px"></div></details>
+    <details class="sec"><summary style="cursor:pointer;font-weight:600">Registro de cargas y correcciones <span class="mu" id="e-ncamb"></span></summary><div id="e-cambios" style="margin-top:8px"></div></details>
+  </section>
+
+  <!-- CLIMA -->
+  <section class="bloque" id="clima">
+    <div class="tit"><div><h2>Clima</h2><p class="mu">Sirve para distinguir inactividad justificada por lluvia. Datos reales de modelos meteorológicos (Google Weather, Open-Meteo, Meteoblue, Meteosource), consolidados por día.</p></div></div>
+    <div class="grid g2">
+      <div class="card" id="clima-actual"><h3>Ahora en la obra</h3><p class="vacio-msg">Cargando…</p></div>
+      <div class="card"><h3>Pronóstico</h3><div id="clima-pron"><p class="vacio-msg">Cargando…</p></div></div>
+    </div>
+    <div class="card sec"><h3>Registro diario consolidado</h3>
+      <p class="mu" style="margin-top:0">Registro limpio por día: se usa la mediana de las fuentes con el día completo. La confianza es alta cuando 2 o más fuentes coinciden (±5 mm) y se marca ⚠️ cuando discrepan. Un día incompleto solo puede confirmar “no apto”.</p>
+      <div id="clima-cruce"></div><p class="mu" id="clima-atrib" style="margin:8px 0 0"></p>
+      <p class="fila" style="margin:10px 0 0"><a class="btn sm" id="dl-clima">⬇ Registro completo (CSV)</a></p>
+      <details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Historial de cambios del registro <span class="mu" id="cambios-n"></span></summary>
+        <div id="clima-cambios" style="margin-top:8px"></div></details></div>
+    <div id="clima-periodo">
+      <h3 class="sec" style="margin-bottom:8px">Periodo del registro de cámara</h3>
+      <div class="card" style="margin-bottom:12px"><p id="clima-texto" style="margin:0"></p></div>
+      <div class="kpis" id="clima-kpis"></div>
+      <div class="card sec"><h3>Lluvia diaria y temperatura máxima</h3><div id="clima-graf"></div></div>
+    </div>
+  </section>
+
+  <!-- CALENDARIO Y OBSERVACIONES: cada día muestra su registro, sus fotos (visor) y sus observaciones (ventanas emergentes) -->
+  <section class="bloque" id="calendario">
+    <div class="tit"><div><h2>Calendario y observaciones</h2><p class="mu">Seleccione un día para ver su registro, sus imágenes y sus observaciones. Los días con observaciones llevan un punto. Las observaciones quedan en el expediente y se incluyen en el reporte.</p></div>
+      <button id="ver-obs">📋 Observaciones</button></div>
+    <div class="leg" id="cal-leg" style="margin:0 0 12px"></div>
+    <div class="grid g2">
+      <!-- Un mes a la vez: el mes en curso si tiene datos, si no el último con datos; ◀ ▶ o el selector para moverse -->
+      <div class="card">
+        <div class="cal-nav"><button class="sm" id="mes-ant" aria-label="Mes anterior">◀</button>
+          <select id="mes-sel" aria-label="Mes"></select>
+          <button class="sm" id="mes-sig" aria-label="Mes siguiente">▶</button></div>
+        <div id="meses"></div>
+      </div>
+      <div class="card" id="dia-det"><p class="vacio-msg">Seleccione un día del calendario.</p></div>
+    </div>
+  </section>
+
+  <!-- REGISTROS -->
+  <section class="bloque" id="registros">
+    <div class="tit"><div><h2>Registros diarios</h2><p class="mu">Recursos detectados por la IA, clima y avance. Clic en una fila para verla en el calendario.</p></div>
+      <div class="fila"><a class="btn sm" id="dl-pdf2">⬇ PDF</a><a class="btn sm" id="dl-xlsx">⬇ Excel</a></div></div>
+    <label class="check" style="border:0;padding:0 0 10px"><input type="checkbox" id="solo-reg" checked> Solo días con registro</label>
+    <div class="tabla"><table id="tabla"></table></div>
+    <!-- Por defecto los últimos 7 días; los botones agregan más (ver pintarRegistros) -->
+    <div class="fila" id="reg-mas" style="margin-top:10px;align-items:center"></div>
+  </section>
+
+  <!-- APORTES CIUDADANOS -->
+  <section class="bloque" id="aportes" style="padding-bottom:40px">
+    <div class="tit"><div><h2>Aportes ciudadanos</h2><p class="mu" id="ap-meta"></p></div>
+      <select id="ap-filtro" style="width:auto"><option value="Pendiente">Pendientes</option><option value="Revisado">Publicados</option><option value="Descartado">Descartados</option><option value="">Todos</option></select></div>
+    <div id="ap-lista" class="grid"></div>
+  </section>
+</main>
+
+<div class="modal" id="modal"><div class="card" id="mbody"></div></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="assets/js/common.js"></script>
+<script src="assets/js/panel.js"></script>
+<script>
+/* ================= Panel del auditor: una página con scroll por secciones ================= */
+/* Estado de la página (lo que respondió la API), para no volver a pedirlo al cambiar de vista:
+     pid       proyecto abierto            resumen   /resumen        imagenes  /imagenes
+     diario    /diario (registros + clima del período)               obs       /observaciones
+     aportes   /aportes                    diaSel    día seleccionado en el calendario
+     mes       mes que muestra el calendario (AAAA-MM)      imgsDia / idxDia   fotos del día abierto y la que se ve en el visor
+     regN      cuántos días muestra la tabla de Registros (7, y crece con "Mostrar 7 más") */
+var S = { pid: null, resumen: null, imagenes: [], diario: null, obs: [], aportes: null, diaSel: null, mes: null, imgsDia: [], idxDia: 0, regN: 7 };
+/* A("/resumen") -> "/api/auditor/P-001/resumen" (rutas de la API del proyecto abierto) */
+var A = function (r) { return "/api/auditor/" + encodeURIComponent(S.pid) + r };
+/* Patrón de cada sección: pintarX() genera el HTML desde S (siempre escapando con esc()); cargarX() pide a la API y pinta. */
+
+/* ---------- estado de cada día (calendario y registros) ---------- */
+/* Clasificación visual de un día del registro diario (r = fila de /diario). El orden de los "if" importa:
+   sin registro > lluvia > sin maquinaria > revisar > normal. Los umbrales 1.5 h y 0.6 coinciden con config.UMBRALES. */
+var ESTADOS = {
+  activo: ["Actividad normal", "b-g"], inactivo: ["Sin maquinaria con clima apto", "b-r"],
+  lluvia: ["No apto por clima", "b-b"], revisar: ["Revisar (tiempo muerto / baja confianza)", "b-o"], sin: ["Sin registro", "b-n"],
+  sindet: ["Fotos sin personas detectadas", "b-n"], noapta: ["Fotos no aptas (cámara con problemas)", "b-o"]
+};
+/* Datos reales (maquinaria_operando = null: la IA actual no mide maquinaria): el día se clasifica por las personas
+   detectadas. "sindet" no significa obra parada: el detector puede no verlas (área oscura o tapada). */
+function estadoDia(r) {
+  if (!r.hay_registro) return r.calidad ? "noapta" : "sin";  /* calidad: hubo fotos, pero ninguna sirve (datos reales) */
+  if (!r.apto_trabajo) return "lluvia";
+  if (r.maquinaria_operando == null) return r.personas_max > 0 ? "activo" : "sindet";
+  if (!r.maquinaria_operando) return "inactivo";
+  if (r.tiempo_muerto_h > 1.5 || r.confianza_min < 0.6) return "revisar";
+  return "activo";
+}
+function badgeDia(r) { var e = ESTADOS[estadoDia(r)]; return '<span class="badge ' + e[1] + '">' + e[0] + "</span>" }
+
+/* ---------- imágenes ---------- */
+/* im = imagen de /imagenes: {archivo, fecha, hora, personas, maquinaria, confianza, url}. Las recibidas por la API de
+   cámaras traen personas/maquinaria/confianza en null hasta que exista el análisis de IA. */
+function detecciones(im) {
+  if (im.personas == null) return '<div class="det"><span class="badge b-n">Sin análisis de IA</span></div>';  /* recibida de la cámara, aún sin procesar */
+  /* confianza null = la IA no detectó nada en la foto (no hay puntaje que mostrar) */
+  return '<div class="det"><span class="badge b-n">👷 ' + im.personas + "</span>" +
+    '<span class="badge ' + (im.maquinaria ? "b-g" : "b-r") + '">🚜 ' + (im.maquinaria ? "Sí" : "No") + "</span>" +
+    (im.confianza == null ? "" : '<span class="badge ' + (im.confianza < 0.6 ? "b-r" : "b-g") + '">' + Math.round(im.confianza * 100) + "%</span>") + "</div>"
+}
+function tarjetaFoto(im, anotar) {
+  return '<div class="card foto"><img loading="lazy" src="' + esc(im.url) + '" alt="Captura del ' + esc(im.fecha) + " " + esc(im.hora) + '" data-a="' + esc(im.archivo) + '">' +
+    '<div class="pie"><b>' + diaSemana(im.fecha) + " " + fmtFecha(im.fecha).slice(0, 5) + "</b> · " + esc(im.hora) + detecciones(im) +
+    (anotar ? '<p style="margin:8px 0 0"><button class="sm" data-n="' + esc(im.archivo) + '">📝 Anotar</button></p>' : "") + "</div></div>"
+}
+/* Después de insertar tarjetas en `cont`: clic en la imagen la amplía; botón "Anotar" lleva al formulario de observación */
+function enlazarFotos(cont) {
+  $$("img[data-a]", cont).forEach(function (i) { i.onclick = function () { verImagen(i.dataset.a) } });
+  $$("[data-n]", cont).forEach(function (b) { b.onclick = function () { anotar(buscarImg(b.dataset.n)) } });
+}
+function buscarImg(a) { return S.imagenes.concat(S.imgsDia || []).filter(function (x) { return x.archivo === a })[0] }  /* galería + fotos del día abierto */
+/* otra: datos mínimos de la foto si no está cargada (p. ej. la foto de una observación antigua): {archivo, fecha, url} */
+function verImagen(archivo, otra) {
+  var im = buscarImg(archivo) || otra; if (!im) return;
+  abrirModal('<img class="grande" src="' + esc(im.url) + '" alt="Captura de cámara del ' + esc(im.fecha) + '">' +
+    "<h2 style='margin-top:12px'>" + diaSemana(im.fecha) + " " + fmtFecha(im.fecha) + (im.hora ? " · " + esc(im.hora) : "") + "</h2>" +
+    '<p class="mu" style="margin:0">' + (im.personas == null ? "Imagen recibida de la cámara · aún sin análisis de IA" :
+      im.personas + " persona(s) · " + (im.maquinaria ? "maquinaria detectada" : "sin maquinaria") + (im.confianza == null ? "" : " · confianza " + Math.round(im.confianza * 100) + "%")) + "</p>" +
+    '<p style="margin:14px 0 0"><button class="pri" id="anotar">📝 Anotar observación</button> <button data-cerrar>Cerrar</button></p>', true);
+  $("#anotar").onclick = function () { cerrarModal(); anotar(im) };
+}
+/* "📝 Anotar" en una foto: ventana para registrar una observación con esa fecha y esa foto (ver formObs) */
+function anotar(im) { formObs({ fecha: im.fecha, im: im }) }
+
+/* ---------- secciones plegables (Imágenes) ---------- */
+/* plegar(id): alterna; plegar(id, true/false): abre/cierra. El cuerpo es el .cuerpo de la sección; el botón, [data-plegar]. */
+function plegar(id, abrir) {
+  var s = $("#" + id), b = $('[data-plegar="' + id + '"]', s), c = $(".cuerpo", s);
+  var ab = abrir == null ? c.hidden : abrir;
+  c.hidden = !ab; b.setAttribute("aria-expanded", ab); b.textContent = ab ? "Ocultar ▴" : "Mostrar ▾";
+}
+$$("[data-plegar]").forEach(function (b) { b.onclick = function () { plegar(b.dataset.plegar) } });
+/* Cualquier enlace a Imágenes (menú, "Ver todas") la despliega antes de desplazarse */
+$$('a[href="#imagenes"]').forEach(function (a) { a.addEventListener("click", function () { plegar("imagenes", true) }) });
+
+/* ---------- RESUMEN ---------- */
+function pintarResumen() {
+  var r = S.resumen, k = r.kpis, al = r.alertas;
+  $("#estado").innerHTML = '<span class="badge ' + claseEstado(r.estado) + '" style="font-size:14px;padding:4px 12px">' + esc(r.estado) + "</span>";
+  $("#frase").textContent = r.texto;
+  $("#obra-meta").textContent = r.obra.ubicacion + " · " + r.obra.institucion + " · Cámara " + r.obra.camara + " · Actualizado " + fmtFecha(k.ultima_actualizacion);
+  /* Datos reales sin medición de avance (k.avance_medido false): "—" en lugar de un número inventado */
+  var sm = "La IA todavía no mide el avance físico de esta obra";
+  $("#kpis").innerHTML = kpi("Avance previsto", k.previsto == null ? "—" : k.previsto + "%", "", k.previsto == null ? sm : "") +
+    kpi("Avance observado (IA)", k.observado == null ? "—" : k.observado + "%", "", k.observado == null ? sm : "") +
+    kpi("Brecha", k.brecha == null ? "—" : k.brecha + " pts", k.brecha == null ? "" : k.brecha <= -10 ? "mal" : k.brecha > -3 ? "bien" : "", k.brecha == null ? sm : "") +
+    kpi("Productividad semanal", k.productividad + "%", k.productividad < 50 ? "mal" : "", k.horas_efectivas + " h efectivas de " + k.horas_sitio + " h en sitio") +
+    kpi("Alertas activas", al.length, al.length ? "mal" : "bien");
+  $("#ia").innerHTML = r.resumen_ia.map(function (t) { return "<li>" + esc(t) + "</li>" }).join("");
+  $("#graf").innerHTML = graficoAvance(r.serie, k.brecha);
+  $("#alertas").innerHTML = al.length ? al.map(function (a) {
+    return '<div class="alerta ' + a.gravedad + '"><b>' + esc(a.codigo) + " · " + esc(a.gravedad) + '</b> <span class="mu">· ' + esc(a.periodo) + "</span><div>" + esc(a.descripcion) + "</div></div>"
+  }).join("") : '<p class="vacio-msg">✅ Sin alertas activas.</p>';
+  ["#dl-pdf", "#dl-pdf2"].forEach(function (s) { $(s).href = A("/reporte.pdf") }); $("#dl-xlsx").href = A("/matriz.xlsx");
+}
+
+/* ---------- IMÁGENES ---------- */
+function pintarImagenes() {
+  var vacio = '<p class="vacio-msg">No hay imágenes. Ejecute <code>python backend/make_data.py</code>.</p>';
+  $("#ultimas").innerHTML = S.imagenes.slice(0, 4).map(function (im) { return tarjetaFoto(im, false) }).join("") || vacio;
+  $("#galeria").innerHTML = S.imagenes.map(function (im) { return tarjetaFoto(im, true) }).join("") || vacio;
+  $("#img-n").textContent = S.imagenes.length ? "(últimas " + S.imagenes.length + ")" : "";
+  enlazarFotos($("#ultimas")); enlazarFotos($("#galeria"));
+}
+
+/* ---------- OBSERVACIONES (ventanas emergentes desde el calendario) ---------- */
+/* S.obs = GET /observaciones: [{id, fecha (de la evidencia), texto, estado, accion, alerta, imagen, autor, creada}].
+   formObs(op)  ventana para registrar una: op = {fecha, im (foto de la que se anota, opcional)}
+   listaObs(f)  ventana con la lista: de un día (f = "AAAA-MM-DD") o todas (f vacío, con filtro por estado)
+   pintarObs()  refresca lo que depende de S.obs: botón "📋 Observaciones (n)", puntos del calendario y el detalle del día */
+var ESTADOS_OBS = ["Pendiente de seguimiento", "En revisión", "Resuelta"];
+function obsDe(f) { return S.obs.filter(function (o) { return o.fecha === f }) }
+function pintarObs() {
+  var abiertas = S.obs.filter(function (o) { return o.estado !== "Resuelta" }).length;
+  $$("#ver-obs, #ver-obs2").forEach(function (b) {
+    b.textContent = "📋 Observaciones" + (S.obs.length ? " (" + S.obs.length + (abiertas ? " · " + abiertas + " sin resolver" : "") + ")" : "");
+  });
+  if (S.diario) pintarCalendario();  /* puntos de los días con observaciones */
+  if (S.diaSel && $("#dia-obs")) pintarDiaObs(S.diaSel);
+}
+function cargarObs() { return api(A("/observaciones")).then(function (l) { S.obs = l; pintarObs() }) }
+
+/* Bloque de observaciones dentro del detalle del día: cuántas hay y los botones para verlas o anotar una nueva */
+function pintarDiaObs(f) {
+  var n = obsDe(f).length;
+  $("#dia-obs").innerHTML = '<div class="fila" style="margin-top:12px">' +
+    '<button class="btn" id="obs-dia">📝 Anotar observación de este día</button>' +
+    (n ? '<button id="obs-dia-ver">📋 Observaciones de este día (' + n + ")</button>" : '<span class="mu">Sin observaciones este día.</span>') + "</div>";
+  $("#obs-dia").onclick = function () { formObs({ fecha: f }) };
+  if (n) $("#obs-dia-ver").onclick = function () { listaObs(f) };
+}
+
+/* Ventana del formulario. Con op.im se muestra la foto (queda vinculada); sin foto, se puede elegir una del día
+   abierto en el calendario. La alerta relacionada se elige entre las activas del resumen. */
+function formObs(op) {
+  var im = op.im, fecha = op.fecha || S.diaSel || (S.resumen ? S.resumen.kpis.ultima_actualizacion : new Date().toISOString().slice(0, 10));
+  var alertas = S.resumen ? S.resumen.alertas : [];
+  var fotosDia = !im && fecha === S.diaSel ? S.imgsDia : [];
+  abrirModal('<form id="f-obs"><h2 style="margin-top:0">📝 Nueva observación</h2>' +
+    (im ? '<div class="obs-foto"><img src="' + esc(im.url) + '" alt="Foto de la observación"><span class="mu">Foto del ' + fmtFecha(im.fecha) + " · " + esc(im.hora) + "<br>quedará vinculada a la observación</span></div>" : "") +
+    '<div class="fila"><div class="c"><label for="o-fecha">Fecha de la evidencia</label><input id="o-fecha" type="date" required value="' + esc(fecha) + '"></div>' +
+    '<div class="c"><label for="o-alerta">Alerta relacionada</label><select id="o-alerta"><option value="">— Ninguna —</option>' +
+    alertas.map(function (a) { return "<option value='" + esc(a.codigo) + "'>" + esc(a.codigo + " · " + a.descripcion.slice(0, 50)) + "</option>" }).join("") + "</select></div></div>" +
+    (fotosDia.length ? '<label for="o-img">Foto relacionada (opcional)</label><select id="o-img"><option value="">— Ninguna —</option>' +
+      fotosDia.map(function (x) { return "<option value='" + esc(x.archivo) + "'>" + esc(x.hora) + "</option>" }).join("") + "</select>" : "") +
+    '<label for="o-texto">Observación / análisis</label><textarea id="o-texto" required placeholder="Describa lo observado y su análisis…"></textarea>' +
+    '<div class="fila"><div class="c"><label for="o-estado">Estado</label><select id="o-estado">' + ESTADOS_OBS.map(function (e) { return "<option>" + e + "</option>" }).join("") + "</select></div>" +
+    '<div class="c"><label for="o-accion">Acción recomendada</label><input id="o-accion" value="Solicitar aclaración a la empresa ejecutora"></div></div>' +
+    '<p class="err" id="o-err"></p><p style="margin:10px 0 0"><button class="pri" type="submit">Guardar observación</button> <button type="button" data-cerrar>Cancelar</button></p></form>', true);
+  setTimeout(function () { $("#o-texto").focus() }, 50);
+  $("#f-obs").onsubmit = function (e) {
+    e.preventDefault();
+    var datos = { fecha: $("#o-fecha").value, texto: $("#o-texto").value, estado: $("#o-estado").value, accion: $("#o-accion").value,
+                  alerta: $("#o-alerta").value, imagen: im ? im.archivo : ($("#o-img") ? $("#o-img").value || null : null) };
+    if (!datos.fecha || !datos.texto.trim()) { $("#o-err").textContent = "Indique la fecha y escriba la observación"; return }
+    var b = $("#f-obs button[type=submit]"); b.disabled = true;
+    api(A("/observaciones"), { json: datos }).then(function () { cerrarModal(); toast("✅ Observación guardada"); return cargarObs() })
+      .catch(function (x) { $("#o-err").textContent = x.message; b.disabled = false });
+  };
+}
+
+/* Ventana con la lista de observaciones. f: solo las de ese día; sin f: todas, con filtro (por defecto "sin resolver"
+   si se llega desde el aviso del Home). Cada una permite cambiar el estado, ver su foto e ir a su día. */
+function listaObs(f, filtro) {
+  var fil = filtro || "";
+  var pintar = function () {
+    var L = (f ? obsDe(f) : S.obs).filter(function (o) { return !fil || (fil === "abiertas" ? o.estado !== "Resuelta" : o.estado === fil) });
+    $("#obs-lista").innerHTML = L.length ? L.map(function (o) {
+      return '<div class="obs-item">' + (o.imagen ? '<img src="/camara/' + esc(S.pid) + "/" + esc(o.imagen) + '" alt="Foto relacionada" data-foto="' + esc(o.imagen) + '" data-fecha="' + esc(o.fecha) + '">' : "") +
+        "<b>" + diaSemana(o.fecha) + " " + fmtFecha(o.fecha) + "</b>" + (o.alerta ? ' <span class="badge b-o">' + esc(o.alerta) + "</span>" : "") +
+        '<div class="mu">' + esc(o.autor) + " · registrada " + esc(String(o.creada).slice(0, 16)) + "</div>" +
+        '<p style="margin:6px 0">' + esc(o.texto) + "</p>" + (o.accion ? '<div class="mu">Acción: ' + esc(o.accion) + "</div>" : "") +
+        '<div class="fila" style="margin-top:6px"><select data-id="' + o.id + '" aria-label="Estado de la observación" style="width:auto">' +
+        ESTADOS_OBS.map(function (e) { return "<option" + (e === o.estado ? " selected" : "") + ">" + e + "</option>" }).join("") + "</select>" +
+        (f ? "" : '<button class="sm" data-ir="' + esc(o.fecha) + '">Ver el día →</button>') + '</div><div style="clear:both"></div></div>'
+    }).join("") : '<p class="vacio-msg">' + (f ? "No hay observaciones este día." : "No hay observaciones con este filtro.") + "</p>";
+    $$("#obs-lista select[data-id]").forEach(function (s) {
+      s.onchange = function () {
+        api(A("/observaciones/" + s.dataset.id), { method: "PATCH", json: { estado: s.value } })
+          .then(function () { toast("Estado actualizado"); return cargarObs() }).then(pintar).catch(function (e) { toast(e.message) })
+      }
+    });
+    $$("#obs-lista [data-ir]").forEach(function (b) { b.onclick = function () { cerrarModal(); verDia(b.dataset.ir, true) } });
+    $$("#obs-lista img[data-foto]").forEach(function (i) {
+      i.onclick = function () { verImagen(i.dataset.foto, { archivo: i.dataset.foto, fecha: i.dataset.fecha, hora: "", url: i.src }) }
+    });
+  };
+  abrirModal("<h2 style='margin-top:0'>📋 Observaciones" + (f ? " del " + diaSemana(f) + " " + fmtFecha(f) : "") + "</h2>" +
+    (f ? "" : '<select id="obs-fil" style="width:auto;margin-bottom:8px"><option value="">Todas</option><option value="abiertas">Sin resolver</option>' +
+      ESTADOS_OBS.map(function (e) { return '<option value="' + e + '">' + e + "</option>" }).join("") + "</select>") +
+    '<div id="obs-lista"></div><p style="margin:14px 0 0">' + (f ? '<button class="pri" id="obs-nueva">📝 Anotar otra de este día</button> ' : "") + "<button data-cerrar>Cerrar</button></p>", true);
+  if (!f) { $("#obs-fil").value = fil; $("#obs-fil").onchange = function () { fil = this.value; pintar() } }
+  else $("#obs-nueva").onclick = function () { formObs({ fecha: f }) };
+  pintar();
+}
+$("#nueva-obs").onclick = function () { formObs({}) };
+$("#ver-obs").onclick = function () { listaObs() };
+
+/* ---------- EMPRESA EJECUTORA ---------- */
+/* Respuesta de /contratista: empresas (cuentas asignadas), cruce (indicadores, días y alertas C-xx), cronograma, bitácora,
+   costos y cambios. Todo es de solo lectura para el auditor. */
+function colones(v) { return v == null ? "—" : "₡" + Math.round(v).toLocaleString("es-CR") }
+/* % planificado a una fecha según las actividades del cronograma (misma fórmula lineal que src/contratista.planificado) */
+function planificadoA(acts, f) {
+  var d = new Date(f + "T12:00").getTime();
+  return Math.round(acts.reduce(function (t, a) {
+    var i = new Date(a.inicio + "T12:00").getTime(), dur = (new Date(a.fin + "T12:00").getTime() - i) / 864e5 + 1;
+    return t + a.peso * Math.min(Math.max((d - i) / 864e5 + 1, 0), dur) / dur;
+  }, 0) * 10) / 10;
+}
+/* Gráfico de tres series sobre las fechas del registro de la IA: cronograma de la empresa, avance reportado en la
+   bitácora (puntos) y avance observado por la IA. Mismo lienzo que graficoAvance (common.js). */
+function graficoEmpresa(e) {
+  var serie = S.resumen ? S.resumen.serie : [];
+  if (!serie.length) return '<p class="vacio-msg">Sin registro de avance de la IA para comparar.</p>';
+  var n = serie.length, X = function (i) { return 40 + 420 * i / (n - 1) }, Y = function (v) { return 180 - 1.6 * v }, idx = {};
+  serie.forEach(function (r, i) { idx[r.f] = i });
+  var linea = function (vals, color, guion) { return '<polyline fill="none" stroke="' + color + '" stroke-width="3"' + (guion ? ' stroke-dasharray="6 4"' : "") + ' points="' + vals.map(function (v, i) { return X(i).toFixed(1) + "," + Y(v).toFixed(1) }).join(" ") + '"/>' };
+  var acts = e.cronograma.actividades, plan = acts.length ? linea(serie.map(function (r) { return planificadoA(acts, r.f) }), "var(--pr)") : "";
+  var medido = serie.some(function (r) { return r.obs != null });  /* datos reales: la IA aún no mide el avance -> sin línea "Observado" */
+  var rep = e.bitacora.filter(function (b) { return b.avance_reportado != null && idx[b.fecha] != null }).map(function (b) {
+    return '<circle cx="' + X(idx[b.fecha]).toFixed(1) + '" cy="' + Y(b.avance_reportado).toFixed(1) + '" r="3.5" fill="var(--al)"><title>' + fmtFecha(b.fecha) + ": reportado " + b.avance_reportado + "%</title></circle>"
+  }).join("");
+  var et = [0, Math.floor((n - 1) / 2), n - 1].map(function (i) { return '<text x="' + (X(i) - 14) + '" y="200">' + serie[i].f.slice(8) + "/" + serie[i].f.slice(5, 7) + "</text>" }).join("");
+  return '<svg class="chart" viewBox="0 0 480 220" role="img" aria-label="Avance planificado por la empresa, reportado en bitácora y observado por la IA">' +
+    '<g stroke="var(--bd)"><line x1="40" y1="20" x2="40" y2="180"/><line x1="40" y1="180" x2="470" y2="180"/><line x1="40" y1="100" x2="470" y2="100" stroke-dasharray="3 4"/></g>' +
+    '<g font-size="10" fill="var(--mu)" font-family="sans-serif"><text x="8" y="24">100%</text><text x="14" y="104">50%</text><text x="22" y="184">0%</text>' + et + "</g>" +
+    plan + (medido ? linea(serie.map(function (r) { return r.obs }), "var(--wa)", true) : "") + rep + "</svg>" +
+    '<div class="leg">' + (plan ? '<span><i style="background:var(--pr)"></i>Cronograma de la empresa</span>' : "") +
+    '<span><i style="background:var(--al)"></i>Reportado en bitácora</span>' + (medido ? '<span><i style="background:var(--wa)"></i>Observado (IA)</span>' : '<span class="mu">Observado (IA): sin medición de avance</span>') + "</div>";
+}
+function pintarEmpresa(e) {
+  var x = e.cruce, k = e.costos, nombres = e.empresas.map(function (u) { return (u.empresa || u.nombre) + " (" + u.nombre + ", " + u.correo + (u.telefono ? ", " + u.telefono : "") + ")" + (u.activo ? "" : " · de baja") });
+  $("#e-meta").textContent = nombres.length ? "Empresa: " + nombres.join(" · ") : "Esta obra no tiene una cuenta de la empresa ejecutora asignada (Administración → Contratistas).";
+  if (!x.tiene_datos) {
+    ["#e-kpis", "#e-graf", "#e-alertas", "#e-dias"].forEach(function (s) { $(s).innerHTML = "" });
+    $("#e-graf").innerHTML = '<p class="vacio-msg">La empresa aún no ha cargado cronograma, bitácora ni costos.</p>';
+  } else {
+    var dif = function (a, b) { return a == null || b == null ? "" : (a - b > 0 ? "+" : "") + Math.round((a - b) * 10) / 10 + " pts vs. IA" };
+    $("#e-kpis").innerHTML = kpi("Observado por la IA", x.observado == null ? "—" : x.observado + "%", "", x.corte ? "Corte " + fmtFecha(x.corte) : "") +
+      kpi("Reportado por la empresa", x.reportado == null ? "—" : x.reportado + "%", x.reportado != null && x.observado != null && x.reportado - x.observado > 5 ? "mal" : "", x.reportado_fecha ? "Bitácora del " + fmtFecha(x.reportado_fecha) + " · " + dif(x.reportado, x.observado) : "") +
+      kpi("Planificado (cronograma empresa)", x.planificado_contratista == null ? "—" : x.planificado_contratista + "%", "", x.cronograma ? "Versión " + x.cronograma : "Sin cronograma") +
+      kpi("Presupuesto ejecutado", x.pct_financiero == null ? "—" : x.pct_financiero + "%", x.pct_financiero != null && x.observado != null && x.pct_financiero - x.observado > 10 ? "mal" : "", k.presupuesto ? colones(k.ejecutado) + " de " + colones(k.presupuesto) + " · " + dif(x.pct_financiero, x.observado) : "") +
+      kpi("Días en contradicción", x.dias_contradiccion + x.dias_clima, x.dias_contradiccion + x.dias_clima ? "mal" : "bien", "Maquinaria o personal no observados, o paro por lluvia con clima apto") +
+      kpi("Días sin bitácora (últimos 7)", x.dias_sin_bitacora == null ? "—" : x.dias_sin_bitacora, x.dias_sin_bitacora >= 3 ? "mal" : "");
+    $("#e-graf").innerHTML = graficoEmpresa(e);
+    $("#e-alertas").innerHTML = x.alertas.length ? x.alertas.map(function (a) {
+      return '<div class="alerta ' + a.gravedad + '"><b>' + esc(a.codigo) + " · " + esc(a.gravedad) + '</b> <span class="mu">· ' + esc(a.periodo) + "</span><div>" + esc(a.descripcion) + "</div></div>"
+    }).join("") : '<p class="vacio-msg">✅ Lo declarado por la empresa coincide con lo observado.</p>';
+    $("#e-dias").innerHTML = x.dias.length ? "<thead><tr><th>Fecha</th><th>Clima declarado</th><th class='num'>Personal declarado / IA</th><th>Maquinaria declarada / IA</th><th class='num'>Avance reportado / IA</th><th>Observación</th></tr></thead><tbody>" +
+      x.dias.slice().reverse().map(function (d) {
+        return '<tr class="click' + (d.motivos.length ? " contradice" : "") + '" data-f="' + esc(d.fecha) + '"><td>' + diaSemana(d.fecha) + " " + fmtFecha(d.fecha) + "</td><td>" + esc(d.clima) + ' <span class="mu">(' + (d.apto ? "registro: apto" : "registro: no apto") + ")</span></td>" +
+          '<td class="num cmp">' + d.personal + " / " + d.personal_ia + "</td><td>" + (d.maquinaria_operando ? "Operando" : "Sin operar") + " / " + (d.maquinaria_ia == null ? '<span class="mu">no medido</span>' : d.maquinaria_ia ? "Operando" : '<b>Sin operar</b>') + "</td>" +
+          '<td class="num cmp">' + (d.avance_reportado == null ? "—" : d.avance_reportado + "%") + " / " + (d.avance_ia == null ? "—" : d.avance_ia + "%") + "</td><td>" + d.motivos.map(function (m) { return '<span class="motivo">' + esc(m) + "</span>" }).join("") + "</td></tr>"
+      }).join("") + "</tbody>" : '<tbody><tr><td class="vacio-msg">No hay días con bitácora y registro de cámara a la vez.</td></tr></tbody>';
+    $$("#e-dias tr.click").forEach(function (tr) { tr.onclick = function () { if (S.diario && S.diario.registros.some(function (r) { return r.fecha === tr.dataset.f })) verDia(tr.dataset.f, true) } });
+  }
+  /* Detalle desplegable: bitácora completa, costos, cronograma y registro de cambios */
+  $("#e-nbit").textContent = "(" + e.bitacora.length + ")";
+  $("#e-bit").innerHTML = e.bitacora.length ? '<div class="tabla"><table><thead><tr><th>Fecha</th><th>Clima</th><th class="num">Personal</th><th>Maquinaria</th><th>Actividades</th><th>Incidentes</th><th>Registro</th></tr></thead><tbody>' +
+    e.bitacora.map(function (b) {
+      return "<tr><td>" + fmtFecha(b.fecha) + "</td><td>" + esc(b.clima) + '</td><td class="num">' + b.personal + "</td><td>" + esc(b.maquinaria || "—") + (b.maquinaria_operando ? " · operando" : "") + "</td><td>" + esc(b.actividades) +
+        (b.avance_reportado != null ? ' <span class="mu">(avance ' + b.avance_reportado + "%)</span>" : "") + "</td><td>" + esc(b.incidentes || "") + '</td><td class="mu">' + esc(String(b.creado).slice(0, 16)) +
+        (b.dias_atraso > 1 ? '<br><span class="motivo">' + b.dias_atraso + " días tarde</span>" : "") + (b.actualizado ? "<br>corregida" : "") + "</td></tr>"
+    }).join("") + "</tbody></table></div>" : '<p class="vacio-msg">Sin entradas.</p>';
+  $("#e-ncost").textContent = k.presupuesto ? "(" + (k.pct_ejecutado) + "% ejecutado)" : "";
+  $("#e-costos").innerHTML = (k.partidas.length ? '<div class="tabla"><table><thead><tr><th>Partida</th><th class="num">Presupuesto</th><th class="num">Ejecutado</th><th class="num">%</th></tr></thead><tbody>' +
+    k.partidas.map(function (p) { return "<tr><td>" + esc(p.codigo + " · " + p.partida) + '</td><td class="num">' + colones(p.monto) + '</td><td class="num">' + colones(p.ejecutado) + '</td><td class="num">' + (p.pct == null ? "—" : p.pct + "%") + "</td></tr>" }).join("") +
+    '</tbody></table></div><p class="mu">Monto del contrato: ' + colones(k.monto_contrato) + " · presupuesto por partidas: " + colones(k.presupuesto) + "</p>" : '<p class="vacio-msg">Sin presupuesto cargado.</p>') +
+    (k.costos.length ? '<div class="tabla"><table><thead><tr><th>Fecha</th><th>Partida</th><th>Tipo</th><th>Descripción</th><th>Documento</th><th class="num">Monto</th><th>Estado</th></tr></thead><tbody>' +
+      k.costos.map(function (c) { return "<tr><td>" + fmtFecha(c.fecha) + "</td><td>" + esc(c.partida) + "</td><td>" + esc(c.tipo) + "</td><td>" + esc(c.descripcion) + "</td><td>" + esc(c.documento || "") + '</td><td class="num">' + colones(c.monto) + "</td><td>" + (c.estado === "Anulado" ? '<span class="badge b-n" title="' + esc(c.motivo_anulacion) + '">Anulado</span>' : "Vigente") + "</td></tr>" }).join("") + "</tbody></table></div>" : "");
+  var cr = e.cronograma;
+  $("#e-ncrono").textContent = cr.vigente ? "(" + cr.vigente.version + " · " + cr.versiones.length + " versión(es))" : "";
+  $("#e-crono").innerHTML = cr.actividades.length ? '<div class="tabla"><table><thead><tr><th>Código</th><th>Actividad</th><th>Inicio</th><th>Fin</th><th class="num">Peso</th></tr></thead><tbody>' +
+    cr.actividades.map(function (a) { return "<tr><td>" + esc(a.codigo || "") + "</td><td>" + esc(a.actividad) + "</td><td>" + fmtFecha(a.inicio) + "</td><td>" + fmtFecha(a.fin) + '</td><td class="num">' + Math.round(a.peso * 10) / 10 + "%</td></tr>" }).join("") +
+    '</tbody></table></div><p class="mu">Versiones: ' + cr.versiones.map(function (v) { return esc(v.version) + " (" + esc(String(v.creado).slice(0, 10)) + (v.notas ? ": " + esc(v.notas) : "") + ")" }).join(" · ") + "</p>" : '<p class="vacio-msg">Sin cronograma cargado.</p>';
+  $("#e-ncamb").textContent = "(" + e.cambios.length + ")";
+  $("#e-cambios").innerHTML = e.cambios.length ? '<div class="tabla"><table><thead><tr><th>Cuándo (UTC)</th><th>Qué</th><th>Acción</th><th>Por</th><th>Detalle</th></tr></thead><tbody>' +
+    e.cambios.map(function (c) { return "<tr><td>" + esc(String(c.fecha).slice(0, 16)) + "</td><td>" + esc(c.tabla) + "</td><td>" + esc(c.accion) + "</td><td>" + esc(c.usuario) + '</td><td class="mu" style="font-size:12px">' + (c.antes ? "Antes: " + esc(c.antes) + "<br>" : "") + "Después: " + esc(c.despues) + "</td></tr>" }).join("") +
+    "</tbody></table></div>" : '<p class="vacio-msg">Sin cargas ni correcciones registradas.</p>';
+}
+function cargarEmpresa() { return api(A("/contratista")).then(pintarEmpresa).catch(function (e) { $("#e-graf").innerHTML = '<p class="vacio-msg">No se pudo cargar la información de la empresa: ' + esc(e.message) + "</p>" }) }
+
+/* ---------- CLIMA ---------- */
+/* Clima real consolidado: condiciones actuales, pronóstico y registro diario de varias fuentes */
+/* Respuesta de /clima-real (src/clima): actual (mediana de fuentes, en vivo), pronostico (por día, con acuerdo entre fuentes),
+   dias (registro consolidado guardado), cambios (auditoría), fuentes (nombre interno -> etiqueta), atribuciones (licencias). */
+var CONF = { alta: ["Alta", "b-g"], media: ["Media", "b-n"], baja: ["Baja", "b-o"], revisar: ["Revisar", "b-o"] };
+/* Valor con sufijo, o "—" si no hay dato */
+function n1(x, suf) { return x == null ? "—" : x + (suf || "") }
+function pintarClimaReal(c) {
+  var aviso = function (t) { return '<p class="vacio-msg">' + esc(t) + "</p>" }, a = c.actual, F = c.fuentes || {};
+  var nombres = {}; (c.dias || []).forEach(function (d) { Object.keys(d.por_fuente).forEach(function (k) { nombres[k] = 1 }) });
+  /* columnas del registro: solo fuentes con historial observado (Meteosource gratuito solo aporta pronóstico) */
+  var cols = Object.keys(F).filter(function (k) { return nombres[k] });
+  $("#clima-actual").innerHTML = "<h3>Ahora en la obra</h3>" + (a ?
+    '<div class="fila" style="align-items:baseline;gap:14px"><b style="font-size:32px">' + n1(a.temp) + '°C</b><span>' + esc(a.condicion || "") + "</span></div>" +
+    '<div class="kpis" style="margin-top:10px">' + kpi("Humedad", n1(a.humedad, "%")) + kpi("Viento", n1(a.viento_kmh, " km/h")) + kpi("Prob. de lluvia", n1(a.prob_lluvia, "%")) + "</div>" +
+    '<p class="mu" style="margin:8px 0 0">Mediana de ' + a.fuentes.length + " fuente(s): " + a.fuentes.map(function (f) { return esc(f.fuente) + " " + n1(f.temp, "°") }).join(" · ") + "</p>" +
+    (a.errores && a.errores.length ? '<p class="mu" style="margin:4px 0 0;color:var(--al)">' + a.errores.map(esc).join("<br>") + "</p>" : "")
+    : aviso(c.error_actual || "Sin datos actuales.") + (c.coordenadas ? "" : aviso("La obra no tiene coordenadas configuradas.")));
+  $("#clima-pron").innerHTML = c.pronostico.length ? '<div class="tabla"><table><thead><tr><th>Día</th><th>Condición</th><th class="num">Máx/Mín</th><th class="num">Lluvia</th><th class="num">Prob.</th><th>Acuerdo</th><th>Previsión</th></tr></thead><tbody>' +
+    c.pronostico.map(function (d) {
+      var det = Object.keys(d.por_fuente).map(function (k) { return (F[k] || k) + ": " + n1(d.por_fuente[k], " mm") }).join("\n");
+      return "<tr><td>" + diaSemana(d.fecha) + " " + fmtFecha(d.fecha).slice(0, 5) + "</td><td>" + esc(d.condicion || "—") + '</td><td class="num">' + n1(d.temp_max, "°") + " / " + n1(d.temp_min, "°") +
+        '</td><td class="num" title="' + esc(det) + '">' + n1(d.lluvia_mm, " mm") + '</td><td class="num">' + n1(d.prob_lluvia, "%") + "</td><td>" +
+        (d.acuerdo ? '<span class="badge ' + (d.acuerdo === "alto" ? "b-g" : "b-o") + '" title="' + esc(det) + '">' + (d.acuerdo === "alto" ? "Alto" : "Bajo") + " · " + d.n_fuentes + "</span>" : '<span class="mu">1 fuente</span>') +
+        "</td><td>" + (d.apto_previsto === 0 ? '<span class="badge b-b">Lluvia fuerte</span>' : d.apto_previsto === 1 ? '<span class="badge b-g">Apto</span>' : "—") + "</td></tr>"
+    }).join("") + "</tbody></table></div>" : aviso("Sin pronóstico guardado. Se obtiene al actualizar el clima (Administración → Clima).");
+  $("#clima-cruce").innerHTML = c.dias.length ? '<div class="tabla"><table><thead><tr><th>Fecha</th><th class="num">Lluvia registrada</th><th>Origen</th><th>Confianza</th>' +
+    cols.map(function (k) { return '<th class="num">' + esc(F[k]) + "</th>" }).join("") + '<th class="num">Máx/Mín</th><th>Día apto</th></tr></thead><tbody>' +
+    c.dias.slice().reverse().map(function (d) {
+      var apto = d.apto_trabajo === 1 ? '<span class="badge b-g">Sí</span>' : d.apto_trabajo === 0 ? '<span class="badge b-b">No (lluvia)</span>' : '<span class="badge b-n">Sin certeza</span>';
+      var cf = CONF[d.confianza] || ["—", "b-n"];
+      return "<tr><td>" + diaSemana(d.fecha) + " " + fmtFecha(d.fecha) + '</td><td class="num"><b>' + n1(d.lluvia_mm, " mm") + "</b></td><td>" + esc(d.fuente) + "</td>" +
+        '<td><span class="badge ' + cf[1] + '"' + (d.dispersion_mm != null ? ' title="Diferencia entre modelos: ' + d.dispersion_mm + ' mm"' : "") + ">" + (d.discrepancia ? "⚠️ " : "") + cf[0] + "</span></td>" +
+        cols.map(function (k) { var x = d.por_fuente[k]; return '<td class="num">' + (x ? x.lluvia_mm + (x.horas < 20 ? ' <span class="mu">(' + x.horas + "h)</span>" : "") : "—") + "</td>" }).join("") +
+        '<td class="num">' + n1(d.temp_max, "°") + " / " + n1(d.temp_min, "°") + "</td><td>" + apto + "</td></tr>"
+    }).join("") + "</tbody></table></div>" : aviso("Aún no hay datos reales guardados para esta obra.");
+  /* Historial de cambios del registro: los valores vienen como texto ("1"/"0" para sí/no) */
+  var CAMPO = { lluvia_mm: "Lluvia (mm)", fuente: "Origen", confianza: "Confianza", apto_trabajo: "Día apto", discrepancia: "Discrepancia" };
+  var vtxt = function (campo, x) { return x == null ? "—" : campo === "apto_trabajo" ? (x === "1" ? "Sí" : "No") : campo === "discrepancia" ? (x === "1" ? "Sí" : "No") : x };
+  $("#dl-clima").href = A("/clima/registro.csv");
+  $("#cambios-n").textContent = "(" + (c.cambios || []).length + ")";
+  $("#clima-cambios").innerHTML = (c.cambios || []).length ? '<div class="tabla"><table><thead><tr><th>Día</th><th>Campo</th><th>Antes</th><th>Después</th><th>Motivo</th><th>Cuándo</th></tr></thead><tbody>' +
+    c.cambios.map(function (x) { return "<tr><td>" + fmtFecha(x.fecha) + "</td><td>" + esc(CAMPO[x.campo] || x.campo) + "</td><td>" + esc(vtxt(x.campo, x.antes)) + "</td><td><b>" + esc(vtxt(x.campo, x.despues)) + "</b></td><td>" + esc(x.motivo) + "</td><td>" + esc(String(x.cambiado).slice(0, 16)) + " UTC</td></tr>" }).join("") +
+    "</tbody></table></div>" : '<p class="vacio-msg">Sin cambios: los días registrados no se han modificado.</p>';
+  $("#clima-atrib").textContent = (c.atribuciones || []).join(" ");
+}
+function cargarClimaReal() { return api(A("/clima-real")).then(pintarClimaReal).catch(function (e) { $("#clima-cruce").innerHTML = '<p class="vacio-msg">No se pudo cargar el clima real: ' + esc(e.message) + "</p>" }) }
+
+/* "Periodo del registro de cámara": clima de las columnas de diario.csv (ya reemplazado por el real donde exista).
+   Gráfico SVG propio: barras de lluvia (escala izquierda, mín. 5 mm) y línea de temperatura máxima (escala derecha 10-30 °C). */
+function pintarClima() {
+  var c = S.diario.clima, R = S.diario.registros;
+  $("#clima-texto").textContent = c.texto;
+  $("#clima-kpis").innerHTML = kpi("Días con lluvia", c.dias_lluvia + " de " + c.dias) + kpi("Lluvia acumulada", c.lluvia_total + " mm") +
+    kpi("Días hábiles aptos", c.dias_aptos + " de " + c.dias_habiles) + kpi("Temp. máx / mín", c.temp_max_prom + "° / " + c.temp_min_prom + "°") + kpi("Humedad promedio", c.humedad_prom + "%");
+  var n = R.length, W = 960, x0 = 46, x1 = 910, bw = (x1 - x0) / n, maxL = Math.max(5, Math.max.apply(null, R.map(function (r) { return r.lluvia_mm }))),
+    yL = function (v) { return 170 - 140 * v / maxL }, yT = function (t) { return 170 - 140 * (t - 10) / 20 };
+  var barras = R.map(function (r, i) {
+    return '<rect x="' + (x0 + i * bw + 1).toFixed(1) + '" y="' + yL(r.lluvia_mm).toFixed(1) + '" width="' + (bw - 2).toFixed(1) + '" height="' + Math.max(170 - yL(r.lluvia_mm), 0).toFixed(1) + '" rx="2" fill="var(--cl)"><title>' + fmtFecha(r.fecha) + ": " + r.lluvia_mm + " mm</title></rect>"
+  }).join("");
+  var temp = R.map(function (r, i) { return (x0 + i * bw + bw / 2).toFixed(1) + "," + yT(r.temp_max).toFixed(1) }).join(" ");
+  var et = [0, Math.floor((n - 1) / 2), n - 1].map(function (i) { return '<text x="' + (x0 + i * bw) + '" y="190">' + fmtFecha(R[i].fecha).slice(0, 5) + "</text>" }).join("");
+  $("#clima-graf").innerHTML = '<svg class="chart" viewBox="0 0 ' + W + ' 196" role="img" aria-label="Lluvia diaria en milímetros y temperatura máxima">' +
+    '<line x1="' + x0 + '" y1="170" x2="' + x1 + '" y2="170" stroke="var(--bd)"/><line x1="' + x0 + '" y1="' + yL(maxL) + '" x2="' + x1 + '" y2="' + yL(maxL) + '" stroke="var(--bd)" stroke-dasharray="3 4"/>' + barras +
+    '<polyline fill="none" stroke="var(--wa)" stroke-width="2.5" points="' + temp + '"/>' +
+    '<g font-size="12" fill="var(--mu)" font-family="sans-serif">' + et + '<text x="0" y="' + (yL(maxL) + 4) + '">' + maxL + ' mm</text><text x="0" y="174">0 mm</text>' +
+    '<text x="' + (x1 + 8) + '" y="' + (yT(30) + 4) + '">30°</text><text x="' + (x1 + 8) + '" y="' + (yT(20) + 4) + '">20°</text><text x="' + (x1 + 8) + '" y="174">10°</text></g></svg>' +
+    '<div class="leg"><span><i style="background:var(--cl)"></i>Lluvia (mm)</span><span><i style="background:var(--wa)"></i>Temperatura máxima (°C)</span></div>';
+}
+
+/* ---------- CALENDARIO ---------- */
+/* Un mes a la vez (S.mes). Semana empieza en domingo (getDay); los días sin registro se muestran atenuados.
+   mesesConDatos(): meses del registro, en orden; el selector y ◀ ▶ solo se mueven entre ellos. */
+function mesesConDatos() {
+  var m = {}; S.diario.registros.forEach(function (r) { m[r.fecha.slice(0, 7)] = 1 }); return Object.keys(m).sort();
+}
+/* Mes inicial: el mes en curso si tiene datos; si no, el último mes con datos */
+function mesInicial() {
+  var ms = mesesConDatos(), hoy = new Date(), actual = hoy.getFullYear() + "-" + ("0" + (hoy.getMonth() + 1)).slice(-2);
+  return ms.indexOf(actual) >= 0 ? actual : ms[ms.length - 1];
+}
+function pintarCalendario() {
+  var R = S.diario.registros, porFecha = {}, ms = mesesConDatos(), ym = S.mes, pos = ms.indexOf(ym);
+  R.forEach(function (r) { porFecha[r.fecha] = r });
+  $("#cal-leg").innerHTML = Object.keys(ESTADOS).map(function (k) { return '<span><i class="sw st-' + k + '"></i>' + ESTADOS[k][0] + "</span>" }).join("");
+  $("#mes-sel").innerHTML = ms.map(function (x) { return '<option value="' + x + '"' + (x === ym ? " selected" : "") + ">" + MESES[+x.slice(5) - 1] + " " + x.slice(0, 4) + "</option>" }).join("");
+  $("#mes-ant").disabled = pos <= 0; $("#mes-sig").disabled = pos >= ms.length - 1;
+  var y = +ym.slice(0, 4), m = +ym.slice(5) - 1, primero = new Date(y, m, 1).getDay(), dias = new Date(y, m + 1, 0).getDate(), celdas = "";
+  for (var i = 0; i < primero; i++) celdas += '<span class="dia vacio"></span>';
+  for (var d = 1; d <= dias; d++) {
+    var f = ym + "-" + (d < 10 ? "0" : "") + d, r = porFecha[f];
+    var nObs = obsDe(f).length;  /* días con observaciones: punto (clase con-obs) y aviso en el título */
+    celdas += r ? '<button class="dia st-' + estadoDia(r) + (S.diaSel === f ? " sel" : "") + (nObs ? " con-obs" : "") + '" data-f="' + f + '" title="' + fmtFecha(f) + ": " + ESTADOS[estadoDia(r)][0] +
+      (nObs ? " · " + nObs + " observación(es)" : "") + '">' + d + "</button>" : '<span class="dia fuera">' + d + "</span>";
+  }
+  $("#meses").innerHTML = '<div class="cal">' + DOW.map(function (x) { return '<span class="dow">' + x + "</span>" }).join("") + celdas + "</div>";
+  $$("#meses [data-f]").forEach(function (b) { b.onclick = function () { verDia(b.dataset.f, false) } });
+}
+/* Cambiar de mes: delta -1 / +1 (◀ ▶) o un mes elegido en el selector */
+function irMes(ym) { S.mes = ym; pintarCalendario() }
+$("#mes-ant").onclick = function () { var ms = mesesConDatos(); irMes(ms[Math.max(0, ms.indexOf(S.mes) - 1)]) };
+$("#mes-sig").onclick = function () { var ms = mesesConDatos(); irMes(ms[Math.min(ms.length - 1, ms.indexOf(S.mes) + 1)]) };
+$("#mes-sel").onchange = function () { irMes(this.value) };
+/* Día que se abre al cargar: el último del mes inicial con fotos (aptas o no); si no hay, el último del mes */
+function diaInicial() {
+  var R = S.diario.registros.filter(function (r) { return r.fecha.slice(0, 7) === S.mes });
+  var con = R.filter(function (r) { return r.hay_registro || r.calidad });
+  return (con.length ? con : R)[(con.length ? con : R).length - 1].fecha;
+}
+/* Detalle de un día (registro, imágenes y observaciones). desplazar=true: lleva el scroll al calendario (desde Registros) */
+/* Valor de una columna del registro con su unidad, o "—" si no se mide (datos reales: avance, confianza, maquinaria) */
+function val(v, suf) { return v == null ? "—" : v + (suf || "") }
+function verDia(f, desplazar) {
+  S.diaSel = f; S.mes = f.slice(0, 7); pintarCalendario();  /* desde Registros o Empresa: el calendario salta al mes del día */
+  var r = S.diario.registros.filter(function (x) { return x.fecha === f })[0];
+  $("#dia-det").innerHTML = "<h3>" + diaSemana(f) + " " + fmtFecha(f) + "</h3>" + badgeDia(r) +
+    (r.hay_registro ? '<div class="tabla" style="margin-top:10px"><table>' +
+      [["Fotos del día", val(r.fotos)], ["Personas (prom / máx)", r.personas_prom + " / " + r.personas_max], ["Maquinaria", r.maquinaria || "—"], ["Horas en sitio / efectivas", r.horas_sitio + " / " + r.horas_efectivas],
+       ["Tiempo muerto", val(r.tiempo_muerto_h, " h")], ["Lluvia · temp. máx", r.lluvia_mm + " mm · " + val(r.temp_max, "°C")], ["Confianza mínima", r.confianza_min == null ? "—" : Math.round(r.confianza_min * 100) + "%"],
+       ["Avance previsto / observado", val(r.avance_previsto, "%") + " / " + val(r.avance_observado, "%")]]
+        .map(function (x) { return "<tr><th>" + x[0] + '</th><td class="num">' + esc(x[1]) + "</td></tr>" }).join("") + "</table></div>"
+      : r.calidad ? '<p class="vacio-msg">La cámara tomó ' + r.fotos_total + " foto(s), pero ninguna sirve para el análisis: <b>" + esc(r.calidad) + "</b>.</p>"
+      : '<p class="vacio-msg">Sin registro de cámara este día.</p>') +
+    '<div id="dia-fotos"><p class="mu">Cargando fotos del día…</p></div>' +
+    '<div id="dia-obs"></div>';  /* observaciones del día: pintarDiaObs (contador + botones que abren las ventanas) */
+  pintarDiaObs(f);
+  if (desplazar) $("#calendario").scrollIntoView({ behavior: "smooth" });
+  /* Las fotos del día se piden aparte (la galería solo trae las últimas): todas las del día, en orden de hora.
+     Se muestran de a una en el visor; arranca en la foto con más personas detectadas (la más informativa). */
+  S.imgsDia = []; $("#dia-fotos").innerHTML = r.hay_registro ? '<p class="mu">Cargando fotos del día…</p>' : "";
+  if (!r.hay_registro) return;
+  api(A("/imagenes?n=80&fecha=" + f)).then(function (ims) {
+    if (S.diaSel !== f) return;  /* el usuario ya eligió otro día */
+    S.imgsDia = ims; S.idxDia = 0;
+    ims.forEach(function (im, i) { if ((im.personas || 0) > (ims[S.idxDia].personas || 0)) S.idxDia = i });
+    pintarVisor();
+  }).catch(function () { $("#dia-fotos").innerHTML = "" });
+}
+/* Visor del día: una foto (tarjetaFoto: clic = ampliar, botón Anotar), ◀ ▶ y barra para recorrer las horas.
+   pintarVisor() arma la estructura una vez; mostrarFoto() solo cambia la foto (así la barra se puede arrastrar). */
+function pintarVisor() {
+  var ims = S.imgsDia;
+  if (!ims.length) { $("#dia-fotos").innerHTML = ""; return }
+  $("#dia-fotos").innerHTML = '<div class="visor" style="margin-top:12px"><div id="v-foto"></div>' +
+    '<div class="visor-ctl"><button class="sm" id="v-ant" aria-label="Foto anterior">◀</button>' +
+    '<input type="range" id="v-rango" min="0" max="' + (ims.length - 1) + '" aria-label="Hora de la foto">' +
+    '<button class="sm" id="v-sig" aria-label="Foto siguiente">▶</button></div>' +
+    '<p class="mu" id="v-pos" style="margin:4px 0 0;text-align:center"></p></div>';
+  $("#v-ant").onclick = function () { mostrarFoto(S.idxDia - 1) };
+  $("#v-sig").onclick = function () { mostrarFoto(S.idxDia + 1) };
+  $("#v-rango").oninput = function () { mostrarFoto(+this.value) };
+  mostrarFoto(S.idxDia);
+}
+function mostrarFoto(i) {
+  var ims = S.imgsDia; i = Math.min(ims.length - 1, Math.max(0, i)); S.idxDia = i;
+  $("#v-foto").innerHTML = tarjetaFoto(ims[i], true); enlazarFotos($("#v-foto"));
+  $("#v-rango").value = i; $("#v-ant").disabled = i === 0; $("#v-sig").disabled = i === ims.length - 1;
+  $("#v-pos").textContent = "Foto " + (i + 1) + " de " + ims.length + " · jornada " + ims[0].hora + " a " + ims[ims.length - 1].hora;
+}
+/* Flechas del teclado: recorren las fotos del día cuando el foco está en el detalle (la barra ya lo hace sola) */
+$("#dia-det").addEventListener("keydown", function (e) {
+  if (!S.imgsDia.length || (e.key !== "ArrowLeft" && e.key !== "ArrowRight") || e.target.id === "v-rango") return;
+  mostrarFoto(S.idxDia + (e.key === "ArrowRight" ? 1 : -1)); e.preventDefault();
+});
+
+/* ---------- REGISTROS ---------- */
+function pintarRegistros() {
+  var solo = $("#solo-reg").checked, todos = S.diario.registros.filter(function (r) { return !solo || r.hay_registro }).slice().reverse();
+  var R = todos.slice(0, S.regN);  /* los más recientes primero: por defecto 7 días */
+  /* Definición de columnas: [título, campo] (texto: número alineado a la derecha) o [título, función(fila) -> HTML] */
+  var cols = [["Fecha", function (r) { return diaSemana(r.fecha) + " " + fmtFecha(r.fecha) }], ["Estado", badgeDia], ["Pers. prom", "personas_prom"], ["Pers. máx", "personas_max"],
+    ["Maquinaria", function (r) { return esc(r.maquinaria || "—") }], ["H. sitio", "horas_sitio"], ["H. efectivas", "horas_efectivas"], ["T. muerto", "tiempo_muerto_h"],
+    ["Lluvia mm", "lluvia_mm"], ["Confianza", function (r) { return r.confianza_min == null ? "—" : Math.round(r.confianza_min * 100) + "%" }],
+    ["Previsto %", function (r) { return val(r.avance_previsto) }], ["Observado %", function (r) { return val(r.avance_observado) }]];
+  $("#tabla").innerHTML = "<thead><tr>" + cols.map(function (c) { return "<th" + (typeof c[1] === "string" ? ' class="num"' : "") + ">" + c[0] + "</th>" }).join("") + "</tr></thead><tbody>" +
+    R.map(function (r) { return '<tr class="click" data-f="' + r.fecha + '">' + cols.map(function (c) { return typeof c[1] === "string" ? '<td class="num">' + esc(r[c[1]]) + "</td>" : "<td>" + c[1](r) + "</td>" }).join("") + "</tr>" }).join("") + "</tbody>";
+  $$("#tabla tr.click").forEach(function (tr) { tr.onclick = function () { verDia(tr.dataset.f, true) } });
+  /* Pie: cuántos se ven y botones para ver más (de a 7 o todos) o volver a los últimos 7 */
+  $("#reg-mas").innerHTML = '<span class="mu">Mostrando ' + R.length + " de " + todos.length + " día(s)</span>" +
+    (R.length < todos.length ? '<button class="sm" data-ver="mas">Mostrar 7 días más</button><button class="sm" data-ver="todos">Ver todos</button>' : "") +
+    (S.regN > 7 ? '<button class="sm" data-ver="menos">Mostrar solo los últimos 7</button>' : "");
+  $$("#reg-mas [data-ver]").forEach(function (b) {
+    b.onclick = function () { var v = b.dataset.ver; S.regN = v === "todos" ? todos.length : v === "menos" ? 7 : S.regN + 7; pintarRegistros() };
+  });
+}
+$("#solo-reg").onchange = function () { S.regN = 7; pintarRegistros() };
+
+/* ---------- APORTES CIUDADANOS ---------- */
+/* Moderación: "Aprobar y publicar" (estado Revisado) los muestra en el sitio público. El contacto solo se ve aquí. */
+function pintarAportes() {
+  var filtro = $("#ap-filtro").value, T = S.aportes.aportes, L = T.filter(function (a) { return !filtro || a.estado === filtro });
+  var pend = T.filter(function (a) { return a.estado === "Pendiente" }).length;
+  $("#ap-meta").textContent = T.length + " recibidos · " + pend + " pendientes de revisión · " + S.aportes.suscripciones + " personas suscritas a alertas";
+  $('.subnav a[href="#aportes"]').textContent = "Aportes ciudadanos" + (pend ? " (" + pend + ")" : "");
+  $("#ap-lista").innerHTML = L.length ? L.map(function (a) {
+    var cls = a.estado === "Revisado" ? "b-g" : a.estado === "Descartado" ? "b-n" : "b-o";
+    return '<div class="card"><div class="fila" style="justify-content:space-between"><div><b>' + esc(a.tipo) + '</b> <span class="mu">· ' + esc(String(a.creada).slice(0, 16)) + " · " + esc(a.nombre || "Anónimo") +
+      (a.contacto ? " · " + esc(a.contacto) : "") + '</span></div><span class="badge ' + cls + '">' + (a.estado === "Revisado" ? "Publicado" : esc(a.estado)) + "</span></div>" +
+      '<p style="margin:8px 0">' + (esc(a.texto) || '<span class="mu">(sin texto)</span>') + "</p>" +
+      (a.foto ? '<img src="' + esc(a.foto) + '" alt="Foto aportada" style="max-width:300px;width:100%;border-radius:8px">' : "") +
+      '<p style="margin:10px 0 0">' + (a.estado !== "Revisado" ? '<button class="pri sm" data-id="' + a.id + '" data-e="Revisado">Aprobar y publicar</button> ' : "") +
+      (a.estado !== "Descartado" ? '<button class="sm" data-id="' + a.id + '" data-e="Descartado">Descartar</button> ' : "") +
+      (a.estado !== "Pendiente" ? '<button class="sm" data-id="' + a.id + '" data-e="Pendiente">Volver a pendiente</button>' : "") + "</p></div>"
+  }).join("") : '<p class="vacio-msg">No hay aportes en esta categoría.</p>';
+  $$("#ap-lista [data-id]").forEach(function (b) {
+    b.onclick = function () { api(A("/aportes/" + b.dataset.id), { json: { estado: b.dataset.e } }).then(function () { toast(b.dataset.e === "Revisado" ? "✅ Aporte publicado en el sitio" : "Aporte actualizado"); cargarAportes() }).catch(function (e) { toast(e.message) }) }
+  });
+}
+function cargarAportes() { return api(A("/aportes")).then(function (j) { S.aportes = j; pintarAportes() }) }
+$("#ap-filtro").onchange = pintarAportes;
+
+/* ---------- inicio: usuario, proyecto elegido y carga de datos ---------- */
+/* NOTA: sinProyecto() ya no se llama desde ningún lugar (sin proyecto o sin acceso se redirige al Home). Candidata a eliminarse. */
+function sinProyecto(msg) {
+  $("#contenido").innerHTML = '<div class="card sin-datos sec"><h2>' + msg + '</h2><p class="mu">' +
+    'Vuelva a <a class="link" href="' + (S.yo.rol === "admin" ? "/admin" : "/auditor") + '">' + (S.yo.rol === "admin" ? "Administración" : "Mis proyectos") + "</a> para elegir otro proyecto.</p></div>";
+  $(".subnav").classList.add("hide");
+}
+/* Obra sin registro de la IA (recién creada o sin análisis): se muestran imágenes recibidas, observaciones, clima real y aportes */
+function modoSinDatos(p) {
+  ["resumen", "calendario", "registros"].forEach(function (id) { $("#" + id).classList.add("hide"); $('.subnav a[href="#' + id + '"]').classList.add("hide") });
+  $("#clima-periodo").classList.add("hide");
+  /* Sin calendario, las observaciones se anotan y consultan desde los botones de esta tarjeta (mismas ventanas).
+     NOTA: formObs propone la fecha de hoy con toISOString() (UTC): después de las 6:00 p. m. de Costa Rica sería el día siguiente. */
+  $("#imagenes").insertAdjacentHTML("beforebegin", '<div class="card sec"><span class="badge b-n">Sin análisis de IA</span><h2 style="margin-top:8px">' + esc(p.nombre) +
+    '</h2><p class="mu" style="margin:0">Esta obra aún no tiene registro diario de avance. Puede revisar las imágenes que envíe su cámara, registrar observaciones y consultar el clima real.</p>' +
+    '<p class="fila" style="margin:12px 0 0"><button id="nueva-obs2">📝 Nueva observación</button><button id="ver-obs2">📋 Observaciones</button></p></div>');
+  $("#nueva-obs2").onclick = function () { formObs({}) };
+  $("#ver-obs2").onclick = function () { listaObs() };
+  plegar("imagenes", true);  /* sin registro diario, las imágenes son el contenido principal: van desplegadas */
+  return api(A("/imagenes?n=24")).then(function (l) {
+    S.imagenes = l; pintarImagenes();
+    if (!l.length) $("#galeria").innerHTML = '<p class="vacio-msg">Todavía no se han recibido imágenes de la cámara.</p>';
+    seguirScroll();
+    return Promise.all([cargarObs(), cargarAportes(), cargarClimaReal(), cargarEmpresa()]);
+  });
+}
+
+api("/api/yo").then(function (yo) {
+  S.yo = yo; $("#usuario").textContent = yo.nombre || yo.correo; $("#usuario").title = yo.correo;
+  var home = yo.rol === "admin" ? "/admin" : "/auditor";
+  $("#volver").href = home; $("#volver").textContent = yo.rol === "admin" ? "← Administración" : "← Mis proyectos";
+  /* Arranque: 1) /api/yo da los proyectos visibles; 2) se valida el ?p= pedido; 3) se cargan en paralelo resumen,
+     imágenes y diario, se pinta todo y se activa el menú; 4) después se cargan observaciones, aportes y clima real. */
+  var pedido = new URLSearchParams(location.search).get("p"), lista = yo.proyectos;
+  var p = lista.filter(function (x) { return x.id === pedido })[0];
+  if (!p) { location.replace(home + (pedido ? "?sin_acceso=1" : "")); return }  /* sin proyecto o sin acceso: volver al Home */
+  S.pid = p.id;
+  $("#obra-sel").innerHTML = lista.length > 1 ? '<select id="cambiar" aria-label="Proyecto">' + lista.map(function (x) { return '<option value="' + esc(x.id) + '"' + (x.id === p.id ? " selected" : "") + ">" + esc(x.nombre) + "</option>" }).join("") + "</select>"
+    : '<span class="chip">' + esc(p.nombre) + "</span>";
+  if ($("#cambiar")) $("#cambiar").onchange = function () { location.href = "/proyecto?p=" + encodeURIComponent(this.value) };
+  document.title = "dIAra · " + p.nombre; medirCabecera();
+  if (!p.datos) return modoSinDatos(p);
+  return Promise.all([api(A("/resumen")), api(A("/imagenes?n=24")), api(A("/diario"))]).then(function (x) {
+    S.resumen = x[0]; S.imagenes = x[1]; S.diario = x[2];
+    S.mes = mesInicial();
+    pintarResumen(); pintarImagenes(); pintarClima(); pintarCalendario(); pintarRegistros();
+    verDia(diaInicial(), false);  /* el detalle arranca con el último día con fotos del mes mostrado */
+    seguirScroll();
+    /* Enlaces del Home como /proyecto?p=P-001#aportes: se salta a la sección una vez pintado el contenido.
+       #imagenes primero se despliega; #observaciones (aviso "sin resolver" del Home) lleva al calendario y, cuando
+       llegan las observaciones, abre la lista filtrada por "sin resolver". */
+    var h = location.hash;
+    if (h) {
+      if (h === "#imagenes") plegar("imagenes", true);
+      var t = $(h === "#observaciones" ? "#calendario" : h); if (t) t.scrollIntoView();
+    }
+    return Promise.all([cargarObs().then(function () { if (h === "#observaciones") listaObs(null, "abiertas") }), cargarAportes(), cargarClimaReal(), cargarEmpresa()]);
+  });
+}).catch(function (e) { if (e.message !== "sesion") toast("Error al cargar el panel: " + e.message) });
+</script>
+</body>
+</html>

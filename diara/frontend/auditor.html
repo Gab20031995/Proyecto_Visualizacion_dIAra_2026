@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<!--
+  Home del auditor (ruta /auditor): resumen de TODOS sus proyectos asignados y acceso al panel de cada uno.
+  Un administrador que entra a /auditor es redirigido a /admin (su propio Home).
+  API: GET /api/yo (usuario) y GET /api/mis-proyectos (tarjetas; misma función que usa Administración: src/tablero.py).
+  Estilos: base.css + panel.css + el bloque style de abajo (propio de esta página).
+-->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>dIAra · Mis proyectos</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%230b5cab%22/%3E%3Ctext x=%2216%22 y=%2222%22 font-size=%2215%22 font-family=%22sans-serif%22 font-weight=%22700%22 fill=%22white%22 text-anchor=%22middle%22%3EIA%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/css/base.css">
+<link rel="stylesheet" href="assets/css/panel.css">
+<style>
+/* ---------- Home del auditor ---------- */
+/* .tp = tarjeta de proyecto (toda la tarjeta es un enlace al panel). .barra = avance previsto/observado. .mini = 4 cifras */
+.saludo{margin:20px 0 14px}.saludo h1{font-size:24px;margin:0}
+.lista-p{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(330px,1fr))}
+.tp{padding:0;overflow:hidden;display:flex;flex-direction:column;color:var(--tx);text-decoration:none;transition:box-shadow .15s,transform .15s}
+.tp:hover{box-shadow:0 6px 20px #0002;transform:translateY(-1px)}
+.tp.atencion{border-color:#d6454590}
+.tp .foto{position:relative;aspect-ratio:16/8;background:var(--bg);overflow:hidden}
+.tp .foto img{width:100%;height:100%;object-fit:cover;display:block}
+.tp .foto .vacia{position:absolute;inset:0;display:grid;place-items:center;color:var(--mu);font-size:14px}
+.tp .foto .badge{position:absolute;top:10px;left:10px;box-shadow:0 1px 4px #0003;background:var(--card)}
+.tp .foto .hora{position:absolute;right:8px;bottom:8px;background:#000a;color:#fff;font-size:11px;padding:2px 8px;border-radius:99px}
+.tp .cuerpo{padding:14px 16px;display:flex;flex-direction:column;gap:10px;flex:1}
+.tp h2{font-size:17px;margin:0}
+.barra{display:grid;grid-template-columns:72px 1fr 44px;gap:8px;align-items:center;font-size:12px;color:var(--mu)}
+.barra .t{height:8px;border-radius:99px;background:var(--bd);overflow:hidden}.barra .t i{display:block;height:100%}
+.barra b{color:var(--tx);text-align:right;font-variant-numeric:tabular-nums}
+.mini{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;text-align:center}
+.mini div{background:var(--bg);border-radius:10px;padding:6px 2px}
+.mini b{display:block;font-size:16px;font-variant-numeric:tabular-nums}.mini .mal b{color:var(--al)}
+.mini span{font-size:11px;color:var(--mu)}
+.tp .entrar{margin-top:auto;display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--bd);padding-top:10px}
+.tp .entrar b{color:var(--pr)}
+.aviso{display:flex;gap:10px;align-items:baseline;padding:8px 0;border-top:1px solid var(--bd)}.aviso:first-of-type{border-top:0}
+.aviso a{margin-left:auto;white-space:nowrap}
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="/auditor">d<span>IA</span>ra</a>
+  <span class="chip">Mis proyectos</span>
+  <span class="grow"></span>
+  <span class="usuario" id="usuario"></span>
+  <button class="sm" id="salir">Salir</button>
+</header>
+
+<main>
+  <!-- Saludo · indicadores de todos los proyectos (#kpis) · pendientes (#atencion) · tarjetas (#lista). Todo lo pinta pintar() -->
+  <div class="saludo"><h1 id="hola">Hola 👋</h1><p class="mu" id="sub" style="margin:4px 0 0">Cargando sus proyectos…</p></div>
+  <div class="kpis" id="kpis"></div>
+  <div class="card sec" id="atencion"></div>
+  <div class="tit sec" style="display:flex;justify-content:space-between;align-items:flex-end;margin:22px 0 10px"><h2 style="margin:0;font-size:20px">Proyectos asignados</h2><span class="mu">Ordenados por urgencia</span></div>
+  <div class="lista-p" id="lista"></div>
+  <p style="height:24px"></p>
+</main>
+
+<div class="modal" id="modal"><div class="card" id="mbody"></div></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="assets/js/common.js"></script>
+<script src="assets/js/panel.js"></script>
+<script>
+/* ================= Home del auditor: resumen de sus proyectos y acceso a cada panel ================= */
+/* Enlace al panel de un proyecto; `seccion` (opcional) salta directo a una sección (#resumen, #aportes...) */
+function url(p, seccion) { return "/proyecto?p=" + encodeURIComponent(p.id) + (seccion ? "#" + seccion : "") }
+function barra(t, v, color) { return '<div class="barra"><span>' + t + '</span><span class="t"><i style="width:' + Math.min(100, v || 0) + "%;background:" + color + '"></i></span><b>' + (v == null ? "—" : v + "%") + "</b></div>" }  /* v null: avance sin medición */
+/* Puntaje para ordenar las tarjetas: pesan más las alertas altas, luego las alertas, aportes pendientes y el atraso
+   (brecha negativa suma). Las obras sin datos van al final. */
+function urgencia(p) { return p.datos ? p.alertas_altas * 100 + p.alertas * 10 + p.aportes_pendientes - (p.brecha || 0) : -1000 }
+
+/* P: lista de tarjetas de /api/mis-proyectos. Las obras sin datos (p.datos=false) no traen avance ni alertas. */
+function pintar(P) {
+  var con = P.filter(function (p) { return p.datos });
+  var sum = function (k) { return con.reduce(function (s, p) { return s + (p[k] || 0) }, 0) };
+  var pend = P.reduce(function (s, p) { return s + p.aportes_pendientes }, 0), atras = con.filter(function (p) { return p.brecha != null && p.brecha <= -10 }).length;
+  $("#sub").textContent = P.length ? "Tiene " + P.length + " proyecto" + (P.length > 1 ? "s" : "") + " asignado" + (P.length > 1 ? "s" : "") + ". Elija uno para ver su panel completo." : "";
+  if (!P.length) {
+    $("#kpis").innerHTML = ""; $("#atencion").classList.add("hide");
+    $("#lista").innerHTML = '<div class="card" style="grid-column:1/-1;text-align:center;padding:40px"><h2>Aún no tiene proyectos asignados</h2><p class="mu">La persona administradora le asignará las obras a fiscalizar.</p></div>';
+    return;
+  }
+  $("#kpis").innerHTML = kpi("Proyectos asignados", P.length, "", con.length + " con cámara y datos") +
+    kpi("Atrasados", atras, atras ? "mal" : "bien") + kpi("Alertas de gravedad alta", sum("alertas_altas"), sum("alertas_altas") ? "mal" : "bien") +
+    kpi("Observaciones abiertas", sum("obs_abiertas")) + kpi("Aportes por revisar", pend, pend ? "" : "bien");
+
+  /* "Requiere su atención": cada aviso = [ícono, texto HTML (ya escapado), enlace, texto del enlace] */
+  var avisos = [];
+  con.forEach(function (p) {
+    if (p.alertas_altas) avisos.push(["🔴", "<b>" + esc(p.nombre) + "</b>: " + p.alertas_altas + " alerta(s) de gravedad alta" + (p.brecha == null ? "" : " · brecha " + p.brecha + " pts"), url(p, "resumen"), "Revisar alertas"]);
+    if (p.obs_abiertas) avisos.push(["📝", "<b>" + esc(p.nombre) + "</b>: " + p.obs_abiertas + " observación(es) sin resolver", url(p, "observaciones"), "Ver observaciones"]);
+  });
+  P.forEach(function (p) { if (p.aportes_pendientes) avisos.push(["🏘️", "<b>" + esc(p.nombre) + "</b>: " + p.aportes_pendientes + " aporte(s) ciudadano(s) por revisar", url(p, "aportes"), "Revisar aportes"]) });
+  $("#atencion").innerHTML = "<h3>Requiere su atención</h3>" + (avisos.length ? avisos.map(function (a) {
+    return '<div class="aviso"><span>' + a[0] + "</span><span>" + a[1] + '</span><a class="link" href="' + a[2] + '">' + a[3] + " →</a></div>"
+  }).join("") : '<p class="vacio-msg">✅ Nada pendiente por ahora.</p>');
+
+  $("#lista").innerHTML = P.slice().sort(function (a, b) { return urgencia(b) - urgencia(a) }).map(function (p) {
+    var foto = p.imagen ? '<img loading="lazy" src="' + esc(p.imagen.url) + '" alt="Última captura de ' + esc(p.nombre) + '"><span class="hora">📷 ' + fmtFecha(p.imagen.fecha).slice(0, 5) + " · " + esc(p.imagen.hora) + "</span>" : '<div class="vacia">📷 Sin cámara conectada</div>';
+    var badge = p.datos ? '<span class="badge ' + claseEstado(p.estado) + '">' + esc(p.estado) + "</span>" : '<span class="badge b-n">' + esc(p.estado_obra || "Sin datos") + "</span>";
+    var cuerpo = p.datos ?
+      '<div style="display:grid;gap:6px">' + barra("Previsto", p.previsto, "var(--pr)") + barra("Observado", p.observado, "var(--wa)") + "</div>" +
+      '<div class="mini"><div class="' + (p.brecha != null && p.brecha <= -10 ? "mal" : "") + '"><b>' + (p.brecha == null ? "—" : p.brecha) + "</b><span>brecha</span></div>" +
+      '<div class="' + (p.alertas_altas ? "mal" : "") + '"><b>' + p.alertas + "</b><span>alertas</span></div>" +
+      "<div><b>" + p.obs_abiertas + "</b><span>obs. abiertas</span></div><div><b>" + p.aportes_pendientes + "</b><span>aportes</span></div></div>" +
+      '<div class="mu">Actualizado ' + fmtFecha(p.ultima_actualizacion) + "</div>"
+      : '<p class="mu" style="margin:0">' + (p.imagen ? "La cámara ya envía imágenes; el análisis de avance de la IA aún no está disponible." : "Esta obra aún no tiene cámara instalada ni datos de avance.") + "</p>";
+    return '<a class="card tp' + (p.alertas_altas ? " atencion" : "") + '" href="' + url(p) + '"><div class="foto">' + foto + badge + "</div>" +
+      '<div class="cuerpo"><div><h2>' + esc(p.nombre) + '</h2><div class="mu">' + esc(p.ubicacion) + " · " + esc(p.institucion) + "</div></div>" + cuerpo +
+      '<div class="entrar"><span class="mu">' + esc(p.id) + "</span><b>Entrar al proyecto →</b></div></div></a>"
+  }).join("");
+}
+
+/* ---------- arranque ---------- */
+/* proyecto.html redirige aquí con ?sin_acceso=1 si se pidió un proyecto no asignado: se avisa y se limpia la URL */
+if (new URLSearchParams(location.search).get("sin_acceso")) { toast("No tiene acceso a ese proyecto"); history.replaceState(null, "", "/auditor") }
+api("/api/yo").then(function (yo) {
+  $("#usuario").textContent = yo.correo; $("#usuario").title = yo.correo;
+  $("#hola").textContent = "Hola, " + (yo.nombre || yo.correo).split(" ")[0] + " 👋";
+  return api("/api/mis-proyectos").then(pintar);
+}).catch(function (e) { if (e.message !== "sesion") toast("Error al cargar: " + e.message) });
+</script>
+</body>
+</html>

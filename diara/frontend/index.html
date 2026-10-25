@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<!--
+  Sitio público de dIAra (ruta /). Para la ciudadanía: no requiere sesión.
+  Secciones: Inicio · Historia · Cómo funciona · Importancia · Espacio ciudadano (obras, suscripción y aportes).
+  Lógica: assets/js/landing.js · Estilos: assets/css/base.css + landing.css · API: backend/routes/publico.py
+  Abierto con doble clic (sin servidor) funciona en modo simulado con datos de ejemplo.
+  Los elementos con id vacíos (#projs, #nal, .obras, #dd...) los llena landing.js.
+-->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>dIAra · ¿Va la obra como se planificó?</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%230b5cab%22/%3E%3Ctext x=%2216%22 y=%2222%22 font-size=%2215%22 font-family=%22sans-serif%22 font-weight=%22700%22 fill=%22white%22 text-anchor=%22middle%22%3EIA%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/css/base.css">
+<link rel="stylesheet" href="assets/css/landing.css">
+</head>
+<body>
+<header>
+  <a class="logo" href="#inicio">d<span>IA</span>ra</a>
+  <div class="search">
+    <input id="q" placeholder="Buscar obra, cantón o provincia…" autocomplete="off" aria-label="Buscar proyectos">
+    <div class="dd" id="dd"></div>
+  </div>
+  <nav aria-label="Secciones">
+    <a href="#inicio">Inicio</a><a href="#historia">Historia</a><a href="#como-funciona">Cómo funciona</a>
+    <a href="#importancia">Importancia</a><a href="#ciudadania">Ciudadanía</a>
+  </nav>
+  <a class="btn pri" id="ir-login" href="login.html">🔐 Acceso al sistema</a>
+</header>
+
+<main>
+  <!-- INICIO -->
+  <section class="card hero" id="inicio">
+    <span class="chip">Código abierto · Compromiso OGP · CGR Costa Rica</span>
+    <h1>¿Va la obra como se planificó?</h1>
+    <p class="mu" style="max-width:640px;margin:0 auto 16px">Cámaras solares de bajo costo + inteligencia artificial para comparar el avance previsto con el avance observado en obras públicas.</p>
+    <div class="stats">
+      <div class="card"><b>&lt; $400</b><span class="mu">por kit de cámara</span></div>
+      <div class="card"><b>24/7</b><span class="mu">monitoreo solar</span></div>
+      <!-- #nal: obras con cámara y datos (landing.js lo toma de /api/resumen). Las alertas NO se publican: ver routes/publico.py -->
+      <div class="card"><b id="nal">–</b><span class="mu">obras monitoreadas</span></div>
+    </div>
+    <p style="margin:18px 0 0"><a class="btn pri" href="#proyectos">Ver proyectos</a> <a class="btn" href="#participar">Quiero participar</a></p>
+  </section>
+
+  <!-- HISTORIA (revisar hitos y fechas con el equipo antes de publicar) -->
+  <section class="card sec" id="historia">
+    <h2>Historia del proyecto</h2>
+    <div class="acr"><span><b>d</b>ispositivo de</span><span><b>IA</b> inteligencia artificial para</span><span><b>r</b>econocimientos y</span><span><b>a</b>lertas</span></div>
+    <p style="margin:0">dIAra es una plataforma de fiscalización digital de <b>bajo costo y código abierto</b> creada por la <b>Contraloría General de la República (CGR)</b> de Costa Rica. Permite supervisar la ejecución de obras públicas en tiempo casi real y nació como un <b>compromiso de gobierno abierto</b> ante la Open Government Partnership (OGP): acercar a la ciudadanía al lugar y al momento en que se invierten los fondos públicos.</p>
+    <ol class="linea">
+      <li><div class="etapa">El reto</div><h3>Fiscalizar a distancia</h3><span class="mu">Las visitas presenciales son costosas y espaciadas: los atrasos en una obra suelen detectarse cuando ya son difíciles de corregir.</span></li>
+      <li><div class="etapa">La idea</div><h3>Compromiso de gobierno abierto</h3><span class="mu">La CGR propone ante la OGP usar cámaras solares e IA para observar las obras de forma continua y abrir esa información a la ciudadanía.</span></li>
+      <li><div class="etapa">El piloto</div><h3>Escuela Limoncito</h3><span class="mu">Primer caso de prueba, en Cieneguita (Limón), para validar la cámara, la detección y las alertas (en este sitio, con datos ilustrativos).</span></li>
+      <li><div class="etapa">Lo que viene</div><h3>Más obras, más datos</h3><span class="mu">Sumar proyectos, conectar el cronograma oficial y los datos reales del clima, y ampliar la participación ciudadana.</span></li>
+    </ol>
+  </section>
+
+  <!-- CÓMO FUNCIONA -->
+  <section class="sec" id="como-funciona">
+    <h2>¿Cómo funciona?</h2>
+    <div class="steps">
+      <div class="card"><div class="n">1</div><h3>📷 Cámara solar</h3><span class="mu">Un kit de menos de US$400, alimentado por panel solar, se instala en la obra.</span></div>
+      <div class="card"><div class="n">2</div><h3>📡 Envío a la nube</h3><span class="mu">Envía fotografías periódicas mediante redes móviles.</span></div>
+      <div class="card"><div class="n">3</div><h3>🤖 IA que reconoce</h3><span class="mu">Detecta, etiqueta y cuenta personas, maquinaria pesada y herramientas.</span></div>
+      <div class="card"><div class="n">4</div><h3>🔔 Matriz y alertas</h3><span class="mu">Compara recursos y avance real con el cronograma, y avisa si hay inactividad.</span></div>
+    </div>
+    <div class="card sec">
+      <h3>Qué mostramos y cómo leerlo</h3>
+      <p class="mu" style="margin:0">Actividad no es avance: por eso dIAra cruza lo que ve la cámara con el cronograma oficial y el clima real de la zona. Siempre indicamos la <b>fecha de última actualización</b> y el <b>nivel de confianza</b> de cada detección, porque la IA puede equivocarse y toda cifra debe validarse con la imagen.</p>
+    </div>
+  </section>
+
+  <!-- IMPORTANCIA -->
+  <section class="sec" id="importancia">
+    <h2>¿Por qué es importante?</h2>
+    <div class="tri">
+      <div class="card"><span class="ico">🎯</span><h3>Verificar el avance</h3><span class="mu">Contrastar los recursos invertidos con el avance físico real de la obra.</span></div>
+      <div class="card"><span class="ico">⏱️</span><h3>Optimizar la auditoría</h3><span class="mu">Menos visitas presenciales y alertas tempranas para priorizar dónde mirar.</span></div>
+      <div class="card"><span class="ico">🏘️</span><h3>Empoderar a la ciudadanía</h3><span class="mu">Cada vecino puede ser inspector de su comunidad y seguir su obra en lenguaje accesible.</span></div>
+    </div>
+  </section>
+
+  <!-- CIUDADANÍA -->
+  <section class="sec" id="ciudadania">
+    <h2>Espacio ciudadano</h2>
+    <span class="mu">Consulte cómo avanzan las obras de su comunidad, suscríbase a los avisos o aporte lo que observa.</span>
+
+    <div id="proyectos" style="margin-top:14px">
+      <h3>Proyectos</h3>
+      <span class="mu">Datos ilustrativos y sintéticos. Las obras sin datos aún no tienen cámara conectada.</span>
+      <!-- Tarjetas de obras: las genera landing.js (pintar) -->
+      <div class="projs" id="projs"></div>
+    </div>
+
+    <div class="two" id="participar">
+      <div class="card">
+        <h2>🏘️ Soy vecino / inspector ciudadano</h2>
+        <p class="mu" style="margin-top:0">No necesita crear una cuenta.</p>
+        <ol class="pasos">
+          <li><b>Consulte</b> el avance general de las obras de su comunidad y la fecha del último dato.</li>
+          <li><b>Suscríbase</b> para recibir un aviso breve por WhatsApp o correo cuando haya cambios importantes.</li>
+          <li><b>Aporte</b> un comentario o una foto de lo que ve. Una persona auditora lo revisa antes de publicarlo.</li>
+        </ol>
+      </div>
+      <div class="card">
+        <div class="tabs2" role="tablist"><button class="on" data-t="sub" role="tab">Suscribirme</button><button data-t="ap" role="tab">Aportar</button></div>
+        <!-- Dos formularios en pestañas (#sub suscripción, #ap aporte). Los <select class="obras"> los llena landing.js.
+             Se envían a POST /suscripciones y POST /aportes; el aporte queda pendiente hasta que un auditor lo apruebe. -->
+        <form id="sub">
+          <label for="s-o">Obra</label><select id="s-o" class="obras"></select>
+          <label for="s-n">Nombre (opcional)</label><input id="s-n">
+          <label for="s-c">Canal</label><select id="s-c"><option>WhatsApp</option><option>Correo</option></select>
+          <label for="s-d">Número de WhatsApp (+506) o correo</label><input id="s-d" required>
+          <p><button class="pri" type="submit">Suscribirme a avisos</button></p>
+        </form>
+        <form id="ap" class="hide">
+          <label for="a-o">Obra</label><select id="a-o" class="obras"></select>
+          <label for="a-t">Tipo de aporte</label><select id="a-t"><option>Comentario</option><option>Avance observado</option><option>Foto</option></select>
+          <label for="a-x">¿Qué observó?</label><textarea id="a-x"></textarea>
+          <label for="a-f">Foto (opcional, máx. 5 MB)</label><input id="a-f" type="file" accept="image/jpeg,image/png">
+          <label for="a-n">Nombre (opcional)</label><input id="a-n">
+          <p class="mu">Una persona auditora revisa cada aporte antes de publicarlo. No suba rostros ni datos personales.</p>
+          <p><button class="pri" type="submit">Enviar aporte</button></p>
+        </form>
+      </div>
+    </div>
+  </section>
+</main>
+<footer>Ejemplo ilustrativo · datos sintéticos. dIAra es un apoyo a la fiscalización; una ausencia de detección no prueba ausencia de actividad.<br><a href="login.html" id="ir-login2" style="color:inherit">Acceso para fiscalizadores de la CGR</a></footer>
+
+<!-- Ventana de detalle de obra y aviso flotante (los usa landing.js); los scripts van al final para que el HTML ya exista -->
+<div class="modal" id="modal"><div class="card" id="mbody"></div></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="assets/js/common.js"></script>
+<script src="assets/js/landing.js"></script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+# Entorno de Python y cachés
+.venv/
+__pycache__/
+*.pyc
+
+# Secretos: claves de clima, SMTP y SECRET_KEY (la plantilla sin valores es .env.ejemplo)
+.env
+
+# Base de datos (usuarios con claves cifradas, observaciones, clima): se crea sola al arrancar
+data/diara.db
+data/*.db-journal
+
+# Datos generados o descargados: se regeneran con los scripts (ver README)
+data/uploads/*
+!data/uploads/.gitkeep
+# registro diario y fotos de cada obra (make_data.py o etl_imagenes.py publicar)
+data/obras/
+# ETL de Drive: ~2,5 GB de fotos originales y curadas, CSV y hojas de contacto
+data/etl/
+# pesos del modelo YOLO (se descargan solos; licencia AGPL-3.0)
+data/ia/
+data/reportes/
+data/tareas.log
+data/plantilla/
+*.part

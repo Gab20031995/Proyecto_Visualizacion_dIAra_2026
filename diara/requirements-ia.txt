@@ -1,0 +1,7 @@
+# Dependencias del análisis con IA (backend/ia_actividad.py, src/ia/). El servidor web NO las necesita.
+# Instalación en CPU (sin tarjeta gráfica), desde la carpeta diara/:
+#   python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.1 torchvision==0.29.1
+#   python -m pip install -r requirements-ia.txt
+# Licencia: ultralytics y los pesos YOLO11 son AGPL-3.0 (ver src/ia/__init__.py antes de usarlo en producción).
+ultralytics==8.4.188
+numpy>=2.0

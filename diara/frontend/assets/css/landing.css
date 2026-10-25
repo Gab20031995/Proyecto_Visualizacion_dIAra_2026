@@ -1,0 +1,57 @@
+/* Landing pública
+   Estilos exclusivos de index.html (sitio ciudadano). Se carga después de base.css. */
+
+/* ---------- Buscador del encabezado (lista desplegable de obras) ---------- */
+.search{position:relative;flex:1;min-width:200px;max-width:380px}
+.dd{position:absolute;left:0;right:0;top:100%;margin-top:4px;background:var(--card);border:1px solid var(--bd);border-radius:10px;display:none;box-shadow:0 8px 24px #0003;overflow:hidden;z-index:25}
+.dd.on{display:block}.dd div{padding:9px 12px;cursor:pointer;display:flex;justify-content:space-between;gap:8px}.dd div:hover{background:var(--prt)}.dd small{color:var(--mu)}
+
+/* ---------- Portada (hero) ---------- */
+.hero{padding:40px 20px;text-align:center;background:linear-gradient(135deg,var(--prt),var(--card))}
+.hero h1{font-size:clamp(26px,5vw,42px)} /* tamaño fluido según el ancho de pantalla */
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:18px auto 0;max-width:520px}
+.stats b{font-size:22px;display:block;color:var(--pr)}
+
+/* ---------- Historia: acrónimo d-IA-r-a y línea de tiempo ---------- */
+.acr{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.acr span{background:var(--prt);border-radius:10px;padding:6px 10px;font-size:13px}.acr b{color:var(--pr);font-size:18px}
+
+/* Línea de tiempo: ::before dibuja la línea horizontal y ::after el punto de cada etapa */
+.linea{list-style:none;margin:14px 0 0;padding:0;display:grid;gap:12px;grid-template-columns:repeat(4,1fr)}
+.linea li{position:relative;padding-top:18px}
+.linea li::before{content:"";position:absolute;top:5px;left:0;right:-12px;height:2px;background:var(--bd)}
+.linea li:last-child::before{right:0}
+.linea li::after{content:"";position:absolute;top:0;left:0;width:12px;height:12px;border-radius:50%;background:var(--pr)}
+.linea .etapa{font-size:12px;font-weight:700;color:var(--pr);text-transform:uppercase;letter-spacing:.04em}
+
+/* ---------- Rejillas de tarjetas (cómo funciona, importancia, participación) ---------- */
+.steps{display:grid;gap:12px;grid-template-columns:repeat(4,1fr);margin-top:12px}
+.tri{display:grid;gap:12px;grid-template-columns:repeat(3,1fr);margin-top:12px}
+.two{display:grid;gap:16px;grid-template-columns:1fr 1fr;margin-top:12px}
+.n{width:30px;height:30px;border-radius:50%;background:var(--pr);color:var(--btx);display:grid;place-items:center;font-weight:700;margin-bottom:8px} /* número de paso */
+.ico{font-size:26px;display:block;margin-bottom:6px}
+/* Adaptación a pantallas angostas: menos columnas */
+@media(max-width:860px){.steps,.linea{grid-template-columns:1fr 1fr}.tri{grid-template-columns:1fr}.linea li::before{display:none}}
+@media(max-width:700px){.two{grid-template-columns:1fr}}
+@media(max-width:480px){.steps,.linea{grid-template-columns:1fr}.stats{grid-template-columns:1fr}}
+
+/* ---------- Espacio ciudadano: tarjetas de obras, pestañas y aportes ---------- */
+.projs{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));margin-top:12px}
+.bar{height:8px;border-radius:99px;background:var(--bd);overflow:hidden;margin-top:6px}.bar i{display:block;height:100%;background:var(--wa)} /* barra de avance */
+/* Última foto de cada obra (versión pública, sin detecciones de la IA). En la tarjeta ocupa el borde superior */
+.foto-obra{position:relative;aspect-ratio:16/10;background:var(--bg);border-radius:10px;overflow:hidden;margin-bottom:10px}
+.card.obra .foto-obra{margin:-16px -16px 12px;border-radius:0}
+.foto-obra img{width:100%;height:100%;object-fit:cover;display:block}
+.foto-obra .vacia{position:absolute;inset:0;display:grid;place-items:center;color:var(--mu);font-size:14px}
+.foto-obra .hora{position:absolute;right:8px;bottom:8px;background:#000a;color:#fff;font-size:11px;padding:2px 8px;border-radius:99px}
+.card.obra{overflow:hidden}
+/* Time-lapse del último día (landing.js): botón sobre la foto y barra de progreso abajo, visible mientras se reproduce */
+.foto-obra .tl-btn{position:absolute;left:8px;bottom:8px;background:#000b;color:#fff;border:0;font-size:12px;font-weight:600;padding:5px 10px;border-radius:99px;cursor:pointer}
+.foto-obra .tl-btn:hover,.foto-obra .tl-btn:focus-visible{background:#000e}
+.foto-obra .tl-barra{position:absolute;left:0;right:0;bottom:0;height:4px;background:#ffffff40;display:none}
+.foto-obra .tl-barra i{display:block;height:100%;width:0;background:var(--pr, #0b5cab);transition:width .3s linear}
+.foto-obra.tl-on .tl-barra{display:block}
+.tabs2{display:flex;gap:4px;background:var(--bg);padding:3px;border-radius:12px;border:1px solid var(--bd);margin:8px 0}
+.tabs2 button{border:0;background:none;flex:1;padding:7px 10px}.tabs2 button.on{background:var(--pr);color:var(--btx)}
+.pasos{margin:8px 0 0;padding-left:20px}.pasos li{margin-bottom:8px}
+.aporte{margin-top:8px}.aporte img{max-width:100%;border-radius:8px;margin-top:6px}
