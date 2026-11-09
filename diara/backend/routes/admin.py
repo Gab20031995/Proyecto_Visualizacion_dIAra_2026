@@ -15,6 +15,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from config import ETL
 from src import store, proyectos, tablero, clima, reporteria, seguimiento, programador
 from routes.sesion import admin_actual
 
@@ -52,12 +53,24 @@ class DatosProyecto(BaseModel):
     cronograma: str | None = None
     fecha_inicio: str | None = None
     fecha_fin: str | None = None
+    # Captura esperada de la cámara (ADM-01): con esto se calculan las fotos esperadas por día
+    captura_intervalo_min: int | str | None = None   # minutos entre fotos
+    captura_desde: str | None = None                 # "HH:MM"
+    captura_hasta: str | None = None                 # "HH:MM"
+    # ETL de imágenes desde Google Drive (ADM-03): antes estaban escritos en config.ETL
+    drive_carpeta: str | None = None                 # enlace o id de la carpeta de Drive
+    etl_rotacion: int | str | None = 0               # 0, 90, 180 o 270
+    etl_nitidez_min: float | str | None = None       # vacío = umbral general
+    etl_ventana_dias: int | str | None = None        # vacío = todo el historial
+    etl_excluir: list[dict] | None = None            # [{desde, hasta, motivo}]
 
 @router.get("/catalogos")
 def catalogos():
     """Listas cerradas para los selectores del formulario."""
     # transiciones: para cada estado, {estado destino: nombre de la acción}; la interfaz arma los botones con esto
-    return dict(provincias=proyectos.PROVINCIAS, estados=proyectos.ESTADOS, transiciones=proyectos.TRANSICIONES)
+    # nitidez_general: el umbral que aplica si la obra no define uno propio (se muestra como ayuda en el formulario)
+    return dict(provincias=proyectos.PROVINCIAS, estados=proyectos.ESTADOS, transiciones=proyectos.TRANSICIONES,
+                rotaciones=proyectos.ROTACIONES, nitidez_general=ETL["nitidez_min"])
 
 @router.get("/proyectos/{pid}")
 def detalle_proyecto(pid: str):

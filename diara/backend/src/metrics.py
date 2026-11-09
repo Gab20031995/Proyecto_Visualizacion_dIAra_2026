@@ -94,9 +94,10 @@ def resumen_obra(pid):
     """Resumen compacto de una obra con datos: KPIs, estado y alertas.
     Las alertas son las de la IA (A-xx, src/alerts.py) más las del cruce con lo que declara la empresa ejecutora
     (C-xx, src/contratista.py); así el panel, las tarjetas, el seguimiento y el PDF las muestran todas."""
-    from src import alerts, contratista, proyectos
+    from src import alerts, contratista, proyectos, ciclo_alertas
     d = load(pid); k = kpis(d); est, txt = estado_texto(k)
     cz = contratista.cruce(proyectos.obtener(pid), d)
-    al = alerts.evaluate(d, k) + cz["alertas"]
+    # Se guardan con su estado (src/ciclo_alertas.py): llegan solo las NO descartadas, con id, estado y vencida
+    al = ciclo_alertas.sincronizar(pid, alerts.evaluate(d, k) + cz["alertas"], "obra")
     k["ultima_actualizacion"] = k["ultima_actualizacion"].isoformat()  # date -> texto (apto para JSON)
     return dict(d=d, kpis=k, estado=est, texto=txt, alertas=al, cruce=cz)  # cruce: ver src/contratista.cruce

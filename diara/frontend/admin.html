@@ -72,6 +72,7 @@ pre.ej{background:var(--bg);border:1px solid var(--bd);border-radius:10px;paddin
 .hist-item{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;padding:8px 0;border-bottom:1px solid var(--bd);font-size:13px}
 .hist-item:last-child{border-bottom:0}
 svg.brechas text{font-size:11px;fill:var(--mu)}svg.brechas .eje{stroke:var(--bd)}
+.cam{font-size:12.5px;color:var(--mu)}.cam.mal{color:var(--al)}  /* línea de salud de la cámara en las tarjetas */
 </style>
 </head>
 <body>
@@ -222,8 +223,21 @@ function pintarResumen() {
   sinAud.forEach(function (p) { items.push("👤 <b>" + esc(p.nombre) + "</b> no tiene auditor activo asignado.") });
   P.filter(function (p) { return p.estado_obra === "En ejecución" && !p.contratistas.some(function (c) { return c.activo }) })
     .forEach(function (p) { items.push("🏗️ <b>" + esc(p.nombre) + "</b> no tiene cuenta de la empresa ejecutora: no se recibe su bitácora ni sus costos.") });
+  P.filter(function (p) { return p.alertas_vencidas }).forEach(function (p) { items.push("⏰ <b>" + esc(p.nombre) + "</b>: " + p.alertas_vencidas + " alerta(s) sin atender hace más del plazo de atención.") });
+  P.filter(function (p) { return (p.camara || {}).alertas_altas }).forEach(function (p) {
+    items.push("📷 <b>" + esc(p.nombre) + "</b>: " + (p.camara.ultima_foto ? "la cámara no envía fotos desde hace " + p.camara.dias_sin_fotos + " día(s)." : "no se ha recibido ninguna foto de la cámara.")) });
   P.filter(function (p) { return p.aportes_pendientes }).forEach(function (p) { items.push("🏘️ <b>" + esc(p.nombre) + "</b>: " + p.aportes_pendientes + " aporte(s) ciudadano(s) por revisar.") });
   $("#atencion").innerHTML = "<h3>Requiere atención</h3>" + (items.length ? items.map(function (t) { return '<p style="margin:6px 0">' + t + "</p>" }).join("") : '<p class="vacio-msg">✅ Todo en orden.</p>');
+}
+
+/* Línea "📷" de las tarjetas: salud de la cámara (src/salud_camara.py vía tablero.tarjeta). Sus alertas S-xx van aparte
+   de las de la obra: dicen que la evidencia se está perdiendo o cambió, no que la obra esté atrasada. */
+function lineaCamara(p) {
+  var c = p.camara || {};
+  if (!c.ultima_foto) return c.alertas ? '<div class="cam mal">📷 Sin fotos recibidas de la cámara</div>' : "";
+  var txt = "📷 Última foto " + fmtFecha(c.ultima_foto) + (c.dias_sin_fotos ? " (hace " + c.dias_sin_fotos + " d)" : "") +
+    (c.cobertura_7d != null ? " · cobertura 7 d " + c.cobertura_7d + "%" : "");
+  return '<div class="cam' + (c.alertas_altas ? " mal" : "") + '">' + txt + (c.alertas ? ' · <b>' + c.alertas + " alerta(s) de cámara</b>" : "") + "</div>";
 }
 
 /* ---------- PROYECTOS ---------- */
@@ -258,8 +272,8 @@ function pintarProyectos() {
       '<div class="datos-p"><div class="' + (p.brecha != null && p.brecha <= -10 ? "mal" : "") + '"><b>' + (p.brecha == null ? "—" : p.brecha) + '</b><span class="mu">pts brecha</span></div>' +
       '<div class="' + (p.alertas_altas ? "mal" : "") + '"><b>' + p.alertas + '</b><span class="mu">alertas' + (p.alertas_altas ? " (" + p.alertas_altas + " altas)" : "") + "</span></div>" +
       "<div><b>" + p.obs_abiertas + '</b><span class="mu">obs. abiertas</span></div></div>' +
-      '<div class="mu">Actualizado ' + fmtFecha(p.ultima_actualizacion) + " · Productividad " + p.productividad + "%" + (p.aportes_pendientes ? " · " + p.aportes_pendientes + " aporte(s) por revisar" : "") + "</div>"
-      : '<p class="vacio-msg" style="padding:6px 0">' + (p.imagen ? "📷 Recibiendo imágenes · aún sin análisis de IA." : "⚪ Aún sin cámara ni datos.") + "</p>";
+      '<div class="mu">Actualizado ' + fmtFecha(p.ultima_actualizacion) + " · Productividad " + p.productividad + "%" + (p.aportes_pendientes ? " · " + p.aportes_pendientes + " aporte(s) por revisar" : "") + "</div>" + lineaCamara(p)
+      : '<p class="vacio-msg" style="padding:6px 0">' + (p.imagen ? "📷 Recibiendo imágenes · aún sin análisis de IA." : "⚪ Aún sin cámara ni datos.") + "</p>" + lineaCamara(p);
     /* Botones de cambio de estado según las transiciones permitidas (vienen de /catalogos) */
     var tr = CAT.transiciones[p.estado_obra] || {};
     var acciones = Object.keys(tr).map(function (dest) {
@@ -318,7 +332,7 @@ function modalHistorial(pid) {
 }
 
 /* ---------- Formulario de proyecto (crear / editar) ---------- */
-var CAT = { provincias: [], estados: [], transiciones: {} };
+var CAT = { provincias: [], estados: [], transiciones: {}, nitidez_general: "" };
 /* Validación previa de coordenadas (para avisar mientras se escribe). Debe coincidir con src/proyectos.py, que es la que manda. */
 var CR = { lat: [8.0, 11.25], lng: [-86.0, -82.5] }, COCO = { lat: [5.4, 5.65], lng: [-87.2, -86.9] };  /* igual que el servidor */
 function enCR(lat, lng) { var d = function (b) { return lat >= b.lat[0] && lat <= b.lat[1] && lng >= b.lng[0] && lng <= b.lng[1] }; return d(CR) || d(COCO) }
@@ -353,8 +367,29 @@ function modalProyecto(p) {
     '<fieldset><legend>Cámara y datos</legend><div class="g2f">' +
       campo("fp-camara", "Código de la cámara", p.camara, { attrs: ' placeholder="DIA-0142"' }) +
 "</div>" +
+      /* Captura esperada (ADM-01): con esto se sabe cuántas fotos deberían llegar por día y se mide la cobertura */
+      '<div class="g3f">' +
+        campo("fp-intervalo", "Toma una foto cada (minutos)", p.captura_intervalo_min, { attrs: ' type="number" min="1" max="1440" step="1" placeholder="15"' }) +
+        campo("fp-desde", "Horario de captura: desde", p.captura_desde, { attrs: ' type="time"' }) +
+        campo("fp-hasta", "hasta", p.captura_hasta, { attrs: ' type="time"' }) +
+      '</div><p class="mu" id="fp-esperadas" style="margin:6px 0 0"></p>' +
       (nuevo ? '<p class="mu">Al guardar podrá generar el token de la API de imágenes para la cámara.</p>' : '<div id="fp-token"></div>' +
         '<p class="fila" style="margin:12px 0 0"><button type="button" class="sm" id="fp-clima">🌦️ Probar clima en estas coordenadas</button><span id="fp-clima-res" class="mu"></span></p>') +
+    "</fieldset>" +
+    /* Configuración del ETL de imágenes (ADM-03). Antes estaba escrita en backend/config.py (config.ETL). */
+    '<fieldset><legend>Imágenes desde Google Drive (ETL)</legend>' +
+      '<p class="mu" style="margin:4px 0 0">Para el proceso que trae las fotos de la cámara desde Drive y decide cuáles sirven para la IA (<code>backend/etl_imagenes.py</code>). Todo es opcional.</p>' +
+      campo("fp-drive", "Carpeta de Drive (enlace o id)", p.drive_carpeta, { attrs: ' placeholder="https://drive.google.com/drive/folders/…"' }) +
+      '<div class="g3f"><div><label for="fp-rotacion">Rotación de las fotos</label><select id="fp-rotacion">' +
+        [[0, "0° (vienen derechas)"], [180, "180° (cámara de cabeza)"], [90, "90° antihorario"], [270, "270° (90° horario)"]].map(function (o) {
+          return '<option value="' + o[0] + '"' + (Number(p.etl_rotacion || 0) === o[0] ? " selected" : "") + ">" + o[1] + "</option>" }).join("") + "</select></div>" +
+        campo("fp-nitidez", "Nitidez mínima", p.etl_nitidez_min, { attrs: ' type="number" min="0" max="50" step="0.1" placeholder="General: ' + esc(CAT.nitidez_general) + '"' }) +
+        campo("fp-ventana", "Ventana de días", p.etl_ventana_dias, { attrs: ' type="number" min="1" max="3650" step="1" placeholder="Todo el historial"' }) +
+      "</div>" +
+      '<p class="mu" style="margin:4px 0 0">Nitidez mínima: solo para cámaras de baja resolución (vacío = umbral general). Ventana: descarga solo los últimos N días con fotos (útil si hay decenas de miles).</p>' +
+      '<label for="fp-excluir">Períodos excluidos (uno por línea: <code>desde | hasta | motivo</code>)</label>' +
+      '<textarea id="fp-excluir" style="min-height:56px" placeholder="2025-09-11 | 2025-09-12 | Instalación de la cámara">' +
+        esc((p.etl_excluir || []).map(function (e) { return e.desde + " | " + e.hasta + " | " + e.motivo }).join("\n")) + "</textarea>" +
     "</fieldset>" +
     '<p class="err" id="m-err"></p><p style="margin:10px 0 0"><button class="pri" type="submit">' + (nuevo ? "Crear proyecto" : "Guardar cambios") + '</button> <button type="button" data-cerrar>Cancelar</button></p></form>', true);
 
@@ -379,13 +414,36 @@ function modalProyecto(p) {
   };
   if (!nuevo) { pintarToken(p); $("#fp-clima").onclick = function () { probarClima(p.id) } }
 
+  /* Fotos esperadas por día (misma cuenta que proyectos.fotos_esperadas_dia en el servidor, que es la que manda):
+     sin horario se asume una cámara de 24 h (00:00 a 23:59). */
+  function esperadas() {
+    var n = parseInt($("#fp-intervalo").value, 10), d = $("#fp-desde").value || "00:00", h = $("#fp-hasta").value || "23:59", m = $("#fp-esperadas");
+    var min = function (x) { return parseInt(x.slice(0, 2), 10) * 60 + parseInt(x.slice(3, 5), 10) };
+    if (!n || n < 1) { m.textContent = "Indique la frecuencia para saber cuántas fotos deberían llegar por día (se usará para detectar cámaras caídas)."; return }
+    if (min(h) <= min(d)) { m.textContent = "⚠️ La hora de fin debe ser posterior a la de inicio."; return }
+    m.textContent = "≈ " + (Math.floor((min(h) - min(d)) / n) + 1) + " fotos esperadas por día (" + d + " a " + h + ").";
+  }
+  ["fp-intervalo", "fp-desde", "fp-hasta"].forEach(function (id) { $("#" + id).oninput = esperadas }); esperadas();
+
+  /* Períodos excluidos: "desde | hasta | motivo" por línea -> [{desde, hasta, motivo}]. Una línea mal escrita se
+     envía tal cual para que el servidor devuelva el mensaje de error correspondiente. */
+  function periodos() {
+    return $("#fp-excluir").value.split("\n").map(function (l) { return l.trim() }).filter(Boolean).map(function (l) {
+      var x = l.split("|").map(function (s) { return s.trim() });
+      return { desde: x[0] || "", hasta: x[1] || "", motivo: x.slice(2).join(" | ") };
+    });
+  }
+
   $("#f-proy").onsubmit = function (e) {
     e.preventDefault();
     var v = function (id) { return $("#" + id).value.trim() };
     var datos = { nombre: v("fp-nombre"), institucion: v("fp-institucion"), estado: nuevo ? v("fp-estado") : p.estado, contratista: v("fp-contratista"), descripcion: v("fp-descripcion"),
       contratacion: v("fp-contratacion"), monto_crc: v("fp-monto") || null, cronograma: v("fp-cronograma"), fecha_inicio: v("fp-inicio") || null, fecha_fin: v("fp-fin") || null,
       provincia: v("fp-provincia"), canton: v("fp-canton"), distrito: v("fp-distrito"), direccion: v("fp-direccion"),
-      lat: v("fp-lat").replace(",", "."), lng: v("fp-lng").replace(",", "."), camara: v("fp-camara") };
+      lat: v("fp-lat").replace(",", "."), lng: v("fp-lng").replace(",", "."), camara: v("fp-camara"),
+      captura_intervalo_min: v("fp-intervalo") || null, captura_desde: v("fp-desde") || null, captura_hasta: v("fp-hasta") || null,
+      drive_carpeta: v("fp-drive") || null, etl_rotacion: v("fp-rotacion"), etl_nitidez_min: v("fp-nitidez") || null,
+      etl_ventana_dias: v("fp-ventana") || null, etl_excluir: periodos() };
     var boton = $('#f-proy button[type="submit"]'); boton.disabled = true;
     (nuevo ? api("/api/admin/proyectos", { json: datos }) : api("/api/admin/proyectos/" + encodeURIComponent(p.id), { method: "PUT", json: datos }))
       .then(function (r) {
@@ -581,9 +639,13 @@ function pintarContratistas() {
 /* ---------- SEGUIMIENTO ---------- */
 /* Datos de /api/admin/seguimiento (src/seguimiento.py): una fila por obra + totales + últimos cambios de estado */
 var ALERTAS = { "A-01": "Inactividad con clima apto", "A-02": "Detección de IA con baja confianza", "A-03": "Brecha de avance", "A-04": "Maquinaria encendida sin operar",
+  "A-05": "Días hábiles sin actividad visible",
   /* Cruce con lo que declara la empresa ejecutora (src/contratista.py) */
   "C-01": "Avance reportado mayor al observado", "C-02": "Ejecución financiera mayor al avance físico", "C-03": "Bitácora contradice a la IA",
-  "C-04": "Paro por lluvia con clima apto", "C-05": "Días sin bitácora" };
+  "C-04": "Paro por lluvia con clima apto", "C-05": "Días sin bitácora",
+  /* Salud de la cámara (src/salud_camara.py): la evidencia se pierde o cambia */
+  "S-01": "Cámara sin fotos en su horario", "S-02": "Cobertura de fotos baja", "S-03": "Cambio de encuadre por revisar",
+  "S-04": "Días sin fotos aptas", "S-05": "Desfase entre captura y llegada", "S-06": "Cámara caída o retirada" };
 function num(v, suf) { return v == null ? '<span class="mu">—</span>' : v + (suf || "") }
 function tendencia(t) {
   if (t == null) return '<span class="mu">—</span>';
@@ -615,15 +677,18 @@ function cargarSeguimiento() {
     $("#seg-kpis").innerHTML = CAT.estados.map(function (e) { return kpi(e, (s.por_estado[e] || 0) + "", e === "Suspendido" && s.por_estado[e] ? "mal" : "") }).join("") +
       kpi("Brecha promedio (activas)", prom == null ? "—" : prom + " pts", prom != null && prom <= -10 ? "mal" : "") +
       kpi("Empeorando (7 d)", empeoran, empeoran ? "mal" : "bien", "Obras cuya brecha creció en los últimos 7 registros") +
-      kpi("Sin datos recientes", sinDatos, sinDatos ? "mal" : "bien", "Obras activas sin registro de la cámara en más de 2 días");
+      kpi("Sin datos recientes", sinDatos, sinDatos ? "mal" : "bien", "Obras activas sin registro de la cámara en más de 2 días") +
+      kpi("Cámaras con alertas", act.filter(function (o) { return o.alertas_camara }).length, act.some(function (o) { return o.alertas_camara_altas }) ? "mal" : "bien", "Obras activas con alertas S-xx (salud de la cámara)");
     $("#seg-tabla").innerHTML = O.length ? "<thead><tr><th>Obra</th><th>Estado</th><th class='num'>Previsto</th><th class='num'>Observado</th><th class='num'>Brecha</th><th class='num'>Tendencia 7 d</th><th class='num' title='Último avance acumulado declarado en la bitácora'>Reportado empresa</th><th class='num' title='% del presupuesto por partidas ya ejecutado'>Ejecución ₡</th>" +
-      "<th class='num'>Alertas</th><th class='num'>Plazo</th><th class='num'>Último dato</th><th class='num'>Lluvia 7 d</th><th class='num'>Obs. / aportes</th></tr></thead><tbody>" +
+      "<th class='num'>Alertas</th><th class='num' title='Salud de la cámara: última foto, cobertura de 7 días y alertas S-xx'>Cámara</th><th class='num'>Plazo</th><th class='num'>Último dato</th><th class='num'>Lluvia 7 d</th><th class='num'>Obs. / aportes</th></tr></thead><tbody>" +
       O.map(function (o) {
         return "<tr" + (activa(o) ? "" : ' style="opacity:.65"') + '><td><b>' + esc(o.nombre) + '</b><br><span class="mu">' + esc(o.id) + " · " + esc(o.institucion) + "</span></td><td>" + badgeObra(o.estado_obra) + "</td>" +
           '<td class="num">' + num(o.previsto, "%") + '</td><td class="num">' + num(o.observado, "%") + '</td><td class="num"><b class="' + (o.brecha != null && o.brecha <= -10 ? "neg" : "") + '">' + num(o.brecha) + "</b></td>" +
           '<td class="num">' + tendencia(o.tendencia_7d) + "</td>" +
           '<td class="num">' + (o.reportado == null ? '<span class="mu">' + (o.empresa_asignada ? "—" : "Sin empresa") + "</span>" : '<span class="' + (o.observado != null && o.reportado - o.observado > 5 ? "neg" : "") + '">' + o.reportado + "%</span>") + "</td>" +
           '<td class="num">' + (o.pct_financiero == null ? '<span class="mu">—</span>' : '<span class="' + (o.observado != null && o.pct_financiero - o.observado > 10 ? "neg" : "") + '">' + o.pct_financiero + "%</span>") + '</td><td class="num">' + (o.alertas ? o.alertas + (o.alertas_altas ? ' <span class="badge b-r">' + o.alertas_altas + " altas</span>" : "") : '<span class="mu">0</span>') + "</td>" +
+          '<td class="num">' + (o.ultima_foto ? fmtFecha(o.ultima_foto) + '<br><span class="' + (o.dias_sin_fotos > 2 ? "neg" : "mu") + '">hace ' + o.dias_sin_fotos + " d" + (o.cobertura_7d != null ? " · " + o.cobertura_7d + "%" : "") + "</span>" : '<span class="mu">Sin fotos</span>') +
+            (o.alertas_camara ? '<br><span class="badge ' + (o.alertas_camara_altas ? "b-r" : "b-o") + '" title="' + esc(o.alertas_camara_codigos.join(", ")) + '">' + o.alertas_camara + " S-xx</span>" : "") + "</td>" +
           '<td class="num" title="% del plazo contractual transcurrido">' + (o.plazo_pct == null ? '<span class="mu" title="Faltan fechas de inicio y fin">—</span>' : o.plazo_pct + "%" + (o.dias_restantes < 0 ? '<br><span class="neg">vencido</span>' : '<br><span class="mu">' + o.dias_restantes + " d</span>")) + "</td>" +
           '<td class="num">' + (o.ultima_actualizacion ? fmtFecha(o.ultima_actualizacion) + '<br><span class="' + (o.dias_sin_datos > 2 ? "neg" : "mu") + '">hace ' + o.dias_sin_datos + " d</span>" : '<span class="mu">Sin datos</span>') + "</td>" +
           '<td class="num">' + (o.lluvia_7d == null ? '<span class="mu">—</span>' : o.lluvia_7d + ' mm<br><span class="mu">' + o.no_aptos_7d + " no aptos</span>") + "</td>" +

@@ -11,7 +11,10 @@ asignado al usuario, así que dentro de cada ruta `p` es siempre un proyecto que
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from src import metrics, store, reports, proyectos, tablero, auth, clima, imagenes as imgs, reporteria, contratista
+import re
+from config import ETL
+from src import metrics, store, reports, proyectos, tablero, auth, clima, imagenes as imgs, reporteria, contratista, salud_camara, ciclo_alertas
+from src.etl import encuadre
 from routes.sesion import usuario_actual, proyecto_permitido
 
 router = APIRouter(prefix="/api/auditor/{pid}")
@@ -20,6 +23,55 @@ def _con_datos(p):
     """Algunas rutas necesitan el registro diario de la IA (diario.csv); una obra nueva aún no lo tiene (409)."""
     if not p["datos"]: raise HTTPException(409, "Este proyecto aún no tiene cámara ni datos")
     return p
+
+
+# ---------- ciclo de vida de las alertas (ALE-01; src/ciclo_alertas.py) ----------
+@router.get("/alertas")
+def alertas_guardadas(p: dict = Depends(proyecto_permitido)):
+    """Todas las alertas guardadas de la obra: también las descartadas y las que ya no se detectan (historial)."""
+    return ciclo_alertas.listar(p["id"])
+
+class CambioAlerta(BaseModel):
+    estado: str          # Abierta | En revisión | Justificación solicitada | Confirmada | Descartada
+    motivo: str = ""     # obligatorio para Justificación solicitada, Confirmada y Descartada
+
+@router.patch("/alertas/{alerta_id}")
+def gestionar_alerta(alerta_id: int, cambio: CambioAlerta, p: dict = Depends(proyecto_permitido), u: dict = Depends(usuario_actual)):
+    """El auditor cambia el estado de una alerta; queda en el historial con su motivo, quién y cuándo."""
+    try: return ciclo_alertas.cambiar_estado(p["id"], alerta_id, cambio.estado, cambio.motivo, u["correo"])
+    except ciclo_alertas.ErrorAlerta as e: raise HTTPException(400, str(e))
+
+@router.get("/alertas/{alerta_id}/historial")
+def historial_alerta(alerta_id: int, p: dict = Depends(proyecto_permitido)):
+    return ciclo_alertas.historial(p["id"], alerta_id)
+
+
+# ---------- salud de la cámara (EDA-01, alertas S-01..S-06) ----------
+@router.get("/salud-camara")
+def salud(p: dict = Depends(proyecto_permitido)):
+    """Sección "Salud de la cámara": fotos por día y hora, huecos, cobertura, cambios de encuadre y alertas S-xx.
+    Funciona también en obras sin registro diario de la IA (solo necesita fotos)."""
+    return salud_camara.resumen(p)
+
+@router.get("/encuadre/{archivo}")
+def panel_encuadre(archivo: str, p: dict = Depends(proyecto_permitido)):
+    """Panel antes/después de un cambio de encuadre (lo genera src/etl/encuadre.py). Solo nombres cambio_AAAA-MM-DD.jpg:
+    no se aceptan rutas (evita pedir otros archivos del servidor)."""
+    if not re.fullmatch(r"cambio_\d{4}-\d{2}-\d{2}\.jpg", archivo): raise HTTPException(404)
+    ruta = ETL["dir"] / p["id"] / "encuadre" / archivo
+    if not ruta.is_file(): raise HTTPException(404)
+    return FileResponse(ruta, media_type="image/jpeg")
+
+class RevisionCambio(BaseModel):
+    estado: str   # Por revisar | Confirmado | Descartado
+
+@router.patch("/encuadre/{fecha}")
+def revisar_cambio(fecha: str, r: RevisionCambio, p: dict = Depends(proyecto_permitido), u: dict = Depends(usuario_actual)):
+    """Confirmar o descartar un cambio de encuadre: deja de generar la alerta S-03 y queda quién y cuándo lo revisó."""
+    try: ok = encuadre.revisar(p["id"], fecha, r.estado, u["correo"])
+    except ValueError as e: raise HTTPException(400, str(e))
+    if not ok: raise HTTPException(404, "Cambio de encuadre no encontrado en este proyecto")
+    return {"ok": True}
 
 
 # ---------- resumen, imágenes y registros diarios ----------

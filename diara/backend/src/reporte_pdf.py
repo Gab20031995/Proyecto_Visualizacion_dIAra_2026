@@ -6,7 +6,8 @@ Biblioteca: ReportLab (platypus). El documento es una lista de "flowables" (Para
 PageBreak...) que ReportLab reparte en páginas; el encabezado y pie se dibujan en cada página con _pie().
 Estructura del PDF:
     _portada(r)     indicadores generales, resumen ejecutivo por proyecto, "requiere atención"
-    _proyecto(p)    una sección (desde página nueva) por proyecto
+    _proyecto(p)    una sección (desde página nueva) por proyecto; incluye "Salud de la cámara" (_camara: alertas
+                    S-xx, fotos del período y cambios de encuadre, datos de reporteria._camara)
 Fuentes: se usan las estándar (Helvetica), que solo cubren Latin-1. Por eso todo texto pasa por limpio()/t()."""
 import io, re, threading
 from xml.sax.saxutils import escape
@@ -148,20 +149,25 @@ def _portada(r):
     T = r["totales"]
     e.append(_kpis([("Proyectos", T["proyectos"], None), ("Atrasados", T["atrasados"], ROJO if T["atrasados"] else VERDE),
                     ("Alertas de gravedad alta", T["alertas_altas"], ROJO if T["alertas_altas"] else VERDE),
+                    ("Cámaras con alertas", T["camaras_con_alertas"], ROJO if T["camaras_con_alertas"] else VERDE),
                     ("Observaciones abiertas", T["obs_abiertas"], None), ("Aportes por revisar", T["aportes_pendientes"], AMBAR if T["aportes_pendientes"] else VERDE)]))
     e.append(P("Resumen ejecutivo", "h2"))
-    filas = [["Proyecto", "Estado", "Previsto", "Observado", "Brecha", "Alertas", "Obs. abiertas", "Aportes por revisar"]]
+    filas = [["Proyecto", "Estado", "Previsto", "Observado", "Brecha", "Alertas", "Cámara", "Obs. abiertas", "Aportes por revisar"]]
     for p in r["proyectos"]:
         k = p["kpis"]  # None si la obra no tiene registro de la IA: se muestran guiones
         filas.append([Paragraph(f"<b>{t(p['nombre'])}</b><br/><font color='#5b6b7a' size='7'>{t(p['ubicacion'])} - {t(p['institucion'])}</font>", E["cel"]),
                       _estado(p), _v(k, "previsto", "%"), _v(k, "observado", "%"), _v(k, "brecha", " pts"),
-                      f"{p['n_alertas']} ({p['n_altas']} altas)" if k else "-", p["obs_abiertas"], p["aportes_pendientes"]])
-    e.append(_tabla(filas, [4.3 * cm, 2.2 * cm, 1.7 * cm, 2.0 * cm, 1.8 * cm, 2.0 * cm, 1.8 * cm, ANCHO - 15.8 * cm]))
+                      f"{p['n_alertas']} ({p['n_altas']} altas)" if k else "-", _celda_camara(p["camara"]), p["obs_abiertas"], p["aportes_pendientes"]])
+    # Anchos medidos para que ningún encabezado se corte a mitad de palabra ("Observado" necesita ~1.9 cm)
+    e.append(_tabla(filas, [3.3 * cm, 1.85 * cm, 1.7 * cm, 1.9 * cm, 1.45 * cm, 1.85 * cm, 1.75 * cm, 1.65 * cm, ANCHO - 15.45 * cm]))
     e.append(P("Requiere atención", "h2"))
     e += [P(f"- {x}") for x in r["atencion"]] or [P("Sin asuntos pendientes en el período.")]
     e += [Spacer(1, 10), P("Cómo leer este reporte: el avance observado es una estimación de la IA a partir de las imágenes de la cámara; "
-                           "una alerta indica necesidad de revisión, no prueba de incumplimiento. El clima es la mediana de varias fuentes "
-                           "meteorológicas y se indica su nivel de confianza.", "mu")]
+                           "una alerta indica necesidad de revisión, no prueba de incumplimiento. Las alertas de cámara (S-xx) indican que la "
+                           "evidencia se está perdiendo o cambió (cámara caída, poca cobertura, cambio de encuadre), no que la obra esté "
+                           "atrasada. Cada alerta muestra su estado de gestión (Abierta, En revisión, Justificación solicitada, Confirmada); "
+                           "las descartadas por el auditor no se incluyen y una alerta 'vencida' lleva más días sin atender que el plazo "
+                           "configurado. El clima es la mediana de varias fuentes meteorológicas y se indica su nivel de confianza.", "mu")]
     return e
 
 def _proyecto(p):
@@ -188,11 +194,10 @@ def _proyecto(p):
               *([P("Avance previsto vs. observado", "h2"), _grafico_avance(p["serie"])] if k["avance_medido"] else [])]
         e += [P("Resumen de la IA", "h2")] + [P(f"- {x}") for x in p["resumen_ia"]]
         e.append(P("Alertas activas", "h2"))
-        e.append(_tabla([["Código", "Gravedad", "Período", "Descripción"]] +
-                        [[a["codigo"], a["gravedad"], a["periodo"], a["descripcion"]] for a in p["alertas"]],
-                        [1.5 * cm, 1.8 * cm, 2.8 * cm, ANCHO - 6.1 * cm]) if p["alertas"] else P("Sin alertas activas."))
+        e.append(_tabla_alertas(p["alertas"]) if p["alertas"] else P("Sin alertas activas."))
     else:
         e += [Spacer(1, 6), P("Esta obra aún no tiene registro diario de la IA (avance y recursos detectados).", "mu")]
+    e += _camara(p["camara"])
     c = p["clima"]
     e += [P(f"Clima del período ({c['dias']} días con registro)", "h2"), P(c["resumen"])]
     if c["filas"]:
@@ -210,6 +215,47 @@ def _proyecto(p):
             e.append(KeepTogether([P("Última imagen de la cámara", "h2"), img, P(p["imagen"]["pie"], "mu")]))  # título e imagen en la misma página
         except Exception:
             e.append(P("No se pudo incluir la última imagen de la cámara.", "mu"))
+    return e
+
+def _estado_alerta(a):
+    """Estado de gestión de una alerta (src/ciclo_alertas.py); en rojo si está vencida (sin atender más del plazo)."""
+    texto = a.get("estado") or "Abierta"
+    if a.get("vencida"):
+        return Paragraph(f"<font color='{_hex(ROJO)}'><b>{t(texto)}</b><br/>vencida ({a['dias_abierta']} d)</font>", E["cel"])
+    return P(texto, "cel")
+
+def _tabla_alertas(alertas):
+    """Tabla de alertas (de la obra o de la cámara) con su estado de gestión. Las descartadas ya no llegan aquí."""
+    return _tabla([["Código", "Gravedad", "Período", "Estado", "Descripción"]] +
+                  [[a["codigo"], a["gravedad"], a["periodo"], _estado_alerta(a), a["descripcion"]] for a in alertas],
+                  [1.4 * cm, 1.7 * cm, 2.5 * cm, 2.4 * cm, ANCHO - 8.0 * cm])
+
+def _celda_camara(c):
+    """Celda "Cámara" del resumen ejecutivo: códigos de las alertas S-xx (en rojo si hay una alta) o "OK"."""
+    if not c["n_alertas"]: return Paragraph(f"<font color='{_hex(VERDE)}'>OK</font>", E["cel"])
+    return Paragraph(f"<font color='{_hex(ROJO if c['n_altas'] else AMBAR)}'><b>{t(', '.join(c['codigos']))}</b></font>", E["cel"])
+
+def _camara(c):
+    """Bloque "Salud de la cámara" de un proyecto (c = reporteria._camara): indicadores, alertas S-xx y cambios de encuadre."""
+    e = [P("Salud de la cámara", "h2")]
+    if not c["hay_fotos"]:
+        e.append(P("No se ha recibido ninguna foto de la cámara de esta obra."))
+    else:
+        d = c["dias_sin_fotos"]
+        e += [_kpis([(f"Última foto ({c['ultima_foto'][11:]})", c["ultima_foto"][:10], ROJO if d > 2 else None),
+                     ("Días desde la última foto", d, ROJO if d > 2 else VERDE),
+                     ("Cobertura últimos 7 días", "-" if c["cobertura_7d"] is None else f"{c['cobertura_7d']}%",
+                      None if c["cobertura_7d"] is None else ROJO if c["cobertura_7d"] < 60 else VERDE),
+                     ("Fotos en el período", c["fotos_periodo"], None),
+                     ("Días sin fotos en el período", f"{c['dias_sin_fotos_periodo']} de {c['dias_periodo']}",
+                      ROJO if c["dias_sin_fotos_periodo"] else VERDE)]),
+              P(f"Horario de captura: {c['horario']}. Fotos esperadas por día: "
+                f"{c['esperadas_dia'] if c['esperadas_dia'] is not None else 'sin configurar (no se mide la cobertura)'}.", "mu")]
+    e.append(_tabla_alertas(c["alertas"]) if c["alertas"] else P("La cámara no tiene alertas."))
+    if c["cambios"]:
+        e += [Spacer(1, 4), P("Cambios de encuadre detectados (revíselos en el panel: Cámara -> Cambios de encuadre)", "mu"),
+              _tabla([["Fecha", "Clasificación", "Revisión"]] + [[x["fecha"], x["clasificacion"], x["estado"]] for x in c["cambios"]],
+                     [2.3 * cm, ANCHO - 5.3 * cm, 3.0 * cm])]
     return e
 
 # El color de la plantilla modifica variables globales del módulo (AZUL y estilos). El candado evita que dos PDF

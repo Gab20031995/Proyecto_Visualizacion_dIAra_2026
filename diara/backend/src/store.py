@@ -12,7 +12,7 @@ Cómo funciona:
   - SIEMPRE usar parámetros (?) para los valores; nunca concatenar datos del usuario en el SQL.
 
 Para producción con varios servidores, migrar a PostgreSQL (SQLite no se comparte entre instancias)."""
-import sqlite3, re, time, hashlib, hmac, secrets, pandas as pd
+import sqlite3, re, time, hashlib, hmac, secrets, json, pandas as pd
 from contextlib import closing
 from config import DB_PATH, DATA_DIR, UPLOADS_DIR, ADMIN_EMAIL, ADMIN_PASS, AUDITOR_DEMO
 
@@ -70,15 +70,27 @@ CREATE TABLE IF NOT EXISTS contratista_cambios(id INTEGER PRIMARY KEY AUTOINCREM
 CREATE TABLE IF NOT EXISTS asignaciones(usuario_id INTEGER REFERENCES usuarios(id) ON DELETE CASCADE,
   project_id TEXT, PRIMARY KEY(usuario_id, project_id));
 -- Catálogo de obras (administrado desde /admin). token_camara guarda solo el hash SHA-256 del token de la cámara.
+-- Las columnas de captura y del ETL (después de token_pista) se describen en COLUMNAS_PROYECTO_NUEVAS, más abajo.
 CREATE TABLE IF NOT EXISTS proyectos(id TEXT PRIMARY KEY, nombre TEXT NOT NULL, descripcion TEXT, institucion TEXT NOT NULL,
   contratista TEXT, contratacion TEXT, monto_crc REAL, provincia TEXT, canton TEXT, distrito TEXT, direccion TEXT,
   lat REAL, lng REAL, camara TEXT, cronograma TEXT, fecha_inicio TEXT, fecha_fin TEXT,
   estado TEXT DEFAULT 'En ejecución', token_camara TEXT, token_pista TEXT,
+  captura_intervalo_min INTEGER, captura_desde TEXT, captura_hasta TEXT,
+  drive_carpeta TEXT, etl_rotacion INTEGER DEFAULT 0, etl_nitidez_min REAL, etl_ventana_dias INTEGER, etl_excluir TEXT,
   creado TEXT DEFAULT CURRENT_TIMESTAMP, actualizado TEXT DEFAULT CURRENT_TIMESTAMP);
 -- Imágenes recibidas por la API de cámaras (las sintéticas siguen en data/obras/<id>/camara/indice.csv)
 CREATE TABLE IF NOT EXISTS imagenes(id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, archivo TEXT NOT NULL,
   fecha TEXT, hora TEXT, tomada TEXT, personas INTEGER, maquinaria INTEGER, confianza REAL,
   recibida TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(project_id, archivo));
+-- Ciclo de vida de las alertas (src/ciclo_alertas.py, ítem ALE-01). Una fila por alerta detectada: (obra, código, clave)
+-- la identifica de un día a otro aunque cambie su período. activa = 1 si la regla la sigue detectando.
+CREATE TABLE IF NOT EXISTS alertas(id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, codigo TEXT NOT NULL,
+  clave TEXT NOT NULL, gravedad TEXT, periodo TEXT, descripcion TEXT, regla TEXT, estado TEXT DEFAULT 'Abierta',
+  activa INTEGER DEFAULT 1, primera_deteccion TEXT, ultima_deteccion TEXT, actualizado TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(project_id, codigo, clave));
+-- Cada cambio de estado de una alerta: quién, cuándo, de qué estado a cuál y por qué (también los automáticos)
+CREATE TABLE IF NOT EXISTS alertas_historial(id INTEGER PRIMARY KEY AUTOINCREMENT, alerta_id INTEGER NOT NULL REFERENCES alertas(id),
+  estado_anterior TEXT, estado_nuevo TEXT NOT NULL, motivo TEXT, usuario TEXT, fecha TEXT DEFAULT CURRENT_TIMESTAMP);
 -- Historial de cambios de estado de las obras (quién, cuándo y por qué)
 CREATE TABLE IF NOT EXISTS proyectos_historial(id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, estado_anterior TEXT,
   estado_nuevo TEXT NOT NULL, motivo TEXT, usuario TEXT, fecha TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -155,7 +167,9 @@ def _c():
         _permitir_contratista(c)
         _quitar_imn(c)
         _migrar_obra_a_proyecto(c)
+        _agregar_columnas_proyecto(c)
         _sembrar_proyectos(c)
+        _copiar_config_etl(c)
         c.executescript(_INDICES)
         # --- datos iniciales: solo si la base no tiene ningún usuario (config.py: ADMIN_EMAIL, ADMIN_PASS, AUDITOR_DEMO) ---
         if not c.execute("SELECT 1 FROM usuarios").fetchone():  # usuarios iniciales
@@ -190,6 +204,51 @@ def _quitar_imn(c):
     c.execute("DELETE FROM clima_registro_cambios WHERE campo='lluvia_imn'")
     for t, col in (("proyectos", "estacion_imn"), ("clima_registro", "lluvia_imn"), ("clima_registro", "estacion_imn"), ("clima_dias", "estacion")):
         if col in [r[1] for r in c.execute(f"PRAGMA table_info({t})")]: c.execute(f"ALTER TABLE {t} DROP COLUMN {col}")
+
+# Columnas agregadas a `proyectos` después de la primera versión (ítems ADM-01 y ADM-03 del backlog, docs/).
+# Las bases nuevas ya las traen en _ESQUEMA; a las bases existentes se les agregan con ALTER TABLE.
+COLUMNAS_PROYECTO_NUEVAS = {
+    # --- Captura esperada de la cámara (ADM-01): con esto se calcula cuántas fotos deberían llegar por día ---
+    "captura_intervalo_min": "INTEGER",   # minutos entre fotos (ej. 15); NULL = no definido
+    "captura_desde": "TEXT",              # inicio del horario de captura "HH:MM" (ej. 07:00)
+    "captura_hasta": "TEXT",              # fin del horario de captura "HH:MM" (ej. 17:00)
+    # --- ETL de imágenes desde Google Drive (ADM-03): antes estaban escritos en config.ETL ---
+    "drive_carpeta": "TEXT",              # id de la carpeta pública de Drive con las fotos de la cámara
+    "etl_rotacion": "INTEGER DEFAULT 0",  # grados (antihorario) para enderezar las fotos de la cámara: 0, 90, 180 o 270
+    "etl_nitidez_min": "REAL",            # umbral propio de nitidez; NULL = el general (config.ETL["nitidez_min"])
+    "etl_ventana_dias": "INTEGER",        # solo descargar los últimos N días con fotos; NULL = todo el historial
+    "etl_excluir": "TEXT",                # JSON [[desde, hasta, motivo], ...]: períodos que la curación descarta a mano
+}
+
+def _agregar_columnas_proyecto(c):
+    """Bases creadas antes: agrega a `proyectos` las columnas de COLUMNAS_PROYECTO_NUEVAS que falten (idempotente)."""
+    existentes = [r[1] for r in c.execute("PRAGMA table_info(proyectos)")]
+    for col, tipo in COLUMNAS_PROYECTO_NUEVAS.items():
+        if col not in existentes: c.execute(f"ALTER TABLE proyectos ADD COLUMN {col} {tipo}")
+
+def _copiar_config_etl(c):
+    """UNA SOLA VEZ por base: copia a la tabla `proyectos` la configuración del ETL que antes vivía en config.ETL
+    (carpetas de Drive, rotación por obra, umbral de nitidez, ventana de días y períodos excluidos).
+    Desde ese momento la fuente oficial es la base (se edita en Administración → Proyectos → Editar) y config.ETL
+    queda solo como valores de fábrica. La marca 'config_etl_copiada' en `configuracion` evita repetir la copia: así,
+    si el admin borra una carpeta o un período, la próxima vez que arranque el servidor no vuelve a aparecer.
+    Solo llena campos vacíos (COALESCE): nunca pisa lo que ya se haya cargado."""
+    if c.execute("SELECT 1 FROM configuracion WHERE clave='config_etl_copiada'").fetchone(): return
+    from config import ETL  # import local: solo se necesita aquí y una vez
+    valores = {}  # project_id -> {columna: valor}
+    for pid, carpeta in ETL.get("carpetas", {}).items():
+        if carpeta: valores.setdefault(pid, {})["drive_carpeta"] = carpeta
+    for pid, grados in ETL.get("rotacion_obra", {}).items(): valores.setdefault(pid, {})["etl_rotacion"] = grados
+    for pid, minimo in ETL.get("nitidez_min_obra", {}).items(): valores.setdefault(pid, {})["etl_nitidez_min"] = minimo
+    for pid, dias in ETL.get("ventana_dias", {}).items(): valores.setdefault(pid, {})["etl_ventana_dias"] = dias
+    for pid, periodos in ETL.get("excluir", {}).items():
+        valores.setdefault(pid, {})["etl_excluir"] = json.dumps([list(p) for p in periodos], ensure_ascii=False)
+    for pid, cols in valores.items():
+        # etl_rotacion tiene DEFAULT 0 (no NULL): se reemplaza solo si sigue en 0
+        sets = ", ".join(f"{k}=CASE WHEN {k} IS NULL OR {k}=0 THEN ? ELSE {k} END" if k == "etl_rotacion"
+                         else f"{k}=COALESCE({k}, ?)" for k in cols)
+        c.execute(f"UPDATE proyectos SET {sets} WHERE id=?", (*cols.values(), pid))
+    c.execute("INSERT INTO configuracion(clave, valor) VALUES('config_etl_copiada', CURRENT_TIMESTAMP)")
 
 def _sembrar_proyectos(c):
     """Primera vez: carga la tabla proyectos desde data/proyectos.csv. Después la tabla es la fuente oficial."""

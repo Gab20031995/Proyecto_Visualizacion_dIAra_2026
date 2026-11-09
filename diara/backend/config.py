@@ -16,11 +16,25 @@ UMBRALES = {"dias_sin_maquinaria": 3,   # A-01: días seguidos sin maquinaria co
             # Cruce con lo que carga la empresa ejecutora (src/contratista.py, alertas C-01..C-05)
             "reportado_vs_ia_pts": 5,   # C-01: avance reportado en la bitácora por encima del observado por la IA
             "financiero_vs_fisico_pts": 10,  # C-02: % del presupuesto ejecutado por encima del avance físico observado
-            "dias_sin_bitacora": 3}     # C-05: días con actividad registrada por la cámara sin bitácora (últimos 7)
+            "dias_sin_bitacora": 3,     # C-05: días con actividad registrada por la cámara sin bitácora (últimos 7)
+            # A-05: inactividad con datos REALES (personas detectadas + índice de cambio). Calibrado con Limoncito (nov. 2026):
+            # el índice de cambio de un día con obra va de ~2,4 (p10) a ~14 (p90); con < 5 y sin personas solo hubo días
+            # sueltos o feriados (Miércoles y Jueves Santo 2026). Ver src/alerts.py.
+            # Ciclo de vida de las alertas (src/ciclo_alertas.py): una alerta Abierta o En revisión por más de estos días
+            # (desde que el sistema la detectó por primera vez) se marca como VENCIDA en el panel, el Home y el reporte.
+            "plazo_atencion_dias": 5,
+            "dias_inactividad": 3,      # A-05: días hábiles seguidos sin actividad visible (ALTA desde el doble)
+            "cambio_inactivo": 5.0}     # A-05: índice de cambio (% de píxeles) por debajo del cual no se ve movimiento
+
+# Feriados de Costa Rica (MM-DD) que A-05 no cuenta como días hábiles. Jueves y Viernes Santo se calculan con la Pascua
+# de cada año (src/alerts.feriados). VERIFICAR cada año con el Ministerio de Trabajo: la ley puede trasladar feriados.
+FERIADOS = ["01-01", "04-11", "05-01", "07-25", "08-02", "08-15", "08-31", "09-15", "12-01", "12-25"]
 
 # Rutas absolutas: los comandos funcionan desde cualquier carpeta.
 ROOT = Path(__file__).resolve().parent.parent   # carpeta diara/
-DATA_DIR = ROOT / "data"
+# DIARA_DATA_DIR permite usar otra carpeta de datos (la usan las pruebas automáticas en tests/ para no tocar la base
+# real). Debe definirse en el sistema o la consola, no en .env: el .env se lee más abajo, cuando DATA_DIR ya está fijado.
+DATA_DIR = Path(os.environ["DIARA_DATA_DIR"]) if os.environ.get("DIARA_DATA_DIR") else ROOT / "data"
 OBRAS_DIR = DATA_DIR / "obras"          # data/obras/<project_id>/diario.csv y camara/
 UPLOADS_DIR = DATA_DIR / "uploads"      # fotos de aportes ciudadanos
 DB_PATH = DATA_DIR / "diara.db"         # base SQLite (se crea sola; esquema en src/store.py)
@@ -78,6 +92,10 @@ REPORTES = {"dia_semanal": 0,             # 0 = lunes ... 6 = domingo (día de e
 APP_URL = os.environ.get("APP_URL", "http://localhost:8000")   # enlace al panel dentro del correo
 
 # ---------- ETL de imágenes desde Google Drive (src/etl, backend/etl_imagenes.py) ----------
+# IMPORTANTE: lo que es POR OBRA (carpetas, ventana_dias, nitidez_min_obra, rotacion_obra, excluir) ahora vive en la tabla
+# `proyectos` y se edita en Administración → Proyectos → Editar → "Imágenes desde Google Drive". Los valores de aquí
+# son solo de FÁBRICA: se copian a la base UNA vez (store._copiar_config_etl) y después cambiarlos aquí no tiene efecto.
+# El resto de ETL (umbrales generales, rotación por código de cámara, hilos, rutas) sí se sigue leyendo de aquí.
 # Carpeta pública de Drive de cada obra (el id es la parte final del enlace .../drive/folders/<id>). No es un secreto,
 # pero cualquiera con el id ve las fotos: cuando termine la carga conviene dejar la carpeta como "Restringida".
 ETL = {"carpetas": {"P-001": os.environ.get("ETL_DRIVE_P001", "1w6fWxTcVRGztNyb7f1TNcPwR2iOijZTr"),   # Escuela Limoncito
@@ -104,6 +122,33 @@ ETL = {"carpetas": {"P-001": os.environ.get("ETL_DRIVE_P001", "1w6fWxTcVRGztNyb7
        "lado_max": 1600,                 # lado mayor de la versión curada (las de la cámara ya miden 1600x1200)
        # Períodos que se excluyen a mano, por obra: (desde, hasta, motivo). Las fechas incluyen ambos extremos.
        "excluir": {"P-001": [("2025-09-11", "2025-09-12", "Instalación y pruebas de la cámara (apunta a un monitor)")]}}
+
+# ---------- Detección de cambio de encuadre (src/etl/encuadre.py; paso "encuadre" del ETL) ----------
+# Método del colab "PROERI_cambio_camara_v2" del profesor. Umbrales calibrados con las fotos reales (nov. 2026):
+#   Limoncito (P-001) tiene 2 cambios reales: 07/11/2025 (disimilitud 0,139) y 12/02/2026 (0,179); el mayor valor
+#   que NO era un cambio fue 0,062. Puente (P-004) y Ticabán (P-005), sin cambios: máximo 0,02.
+ENCUADRE = {"horas": ("08:00", "16:59"),   # solo fotos de día (las de la noche no muestran el encuadre)
+            "fotos_por_dia": 2,            # se toman las más cercanas a la hora objetivo
+            "hora_objetivo": 12,           # mediodía: luz parecida todos los días
+            "tamano": (640, 480),          # tamaño al que se reduce cada foto antes de medir
+            "dias_referencia": 7,          # primeros días con fotos que forman la "referencia" de cada encuadre
+            "dias_ventana": 7,             # días CON fotos a cada lado para comparar antes/después
+            "umbral_ventana": 0.10,        # disimilitud entre ventanas a partir de la cual se marca un cambio
+            "desplazamiento_px": 16,       # desplazamiento estimado (px en 640x480) que indica que la cámara se movió
+            "pico_confiable": 0.10}        # pico de correlación de fase desde el cual el desplazamiento estimado es
+                                           # confiable (días seguidos SIN cambio: mediana 0,13 a 0,35 según la cámara)
+
+# ---------- Salud de la cámara: alertas S-01..S-06 (src/salud_camara.py; ítems EDA-01 y ALE-03 del backlog) ----------
+# Solo las obras "En ejecución" generan alertas de cámara caída o con poca cobertura (S-01, S-02, S-04, S-06): en una
+# obra planificada o suspendida que no lleguen fotos puede ser lo esperado. S-03 (encuadre) aplica siempre.
+SALUD_CAMARA = {"horas_sin_fotos": 3,      # S-01: horas DEL HORARIO DE CAPTURA transcurridas sin recibir fotos
+                "dias_sin_fotos": 3,       # S-06: días sin ninguna foto (cámara caída o retirada); reemplaza a S-01
+                "cobertura_min": 60,       # S-02: % mínimo de fotos recibidas frente a las esperadas en un día
+                "dias_cobertura": 7,       # S-02: días completos que se revisan (hasta ayer)
+                "dias_baja_cobertura": 3,  # S-02: cuántos de esos días bajo el mínimo generan la alerta
+                "dias_no_aptas": 3,        # S-04: días seguidos con fotos, pero ninguna apta (lente empañado, quemadas…)
+                "desfase_min": 30,         # S-05: minutos entre la captura y la llegada al servidor (mediana, API)
+                "dias_mapa": 400}          # días que muestra el mapa de calor día x hora (los más recientes)
 
 # ---------- IA: actividad en obra (src/ia, backend/ia_actividad.py) ----------
 # Requiere las dependencias de requirements-ia.txt (PyTorch + Ultralytics); el servidor web NO las necesita.

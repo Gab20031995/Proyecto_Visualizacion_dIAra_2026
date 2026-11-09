@@ -372,23 +372,23 @@ def _alertas(x, contra, clima_mal, sin):
     # C-01 y C-02 comparan contra el avance observado: no aplican mientras la IA no lo mida (observado None)
     if x["reportado"] is not None and x["observado"] is not None and x["reportado"] - x["observado"] > U["reportado_vs_ia_pts"]:
         dif = round(x["reportado"] - x["observado"], 1)
-        out.append(dict(codigo="C-01", gravedad="ALTA" if dif >= 2 * U["reportado_vs_ia_pts"] else "MEDIA", periodo=corte,
+        out.append(dict(codigo="C-01", gravedad="ALTA" if dif >= 2 * U["reportado_vs_ia_pts"] else "MEDIA", periodo=corte, clave="vigente",
             descripcion=f"La empresa reporta {x['reportado']}% de avance; la IA observa {x['observado']}% ({dif} pts menos).",
             regla=f"Avance reportado - observado > {U['reportado_vs_ia_pts']} pts"))
     if x["pct_financiero"] is not None and x["observado"] is not None and x["pct_financiero"] - x["observado"] > U["financiero_vs_fisico_pts"]:
-        out.append(dict(codigo="C-02", gravedad="ALTA", periodo=corte,
+        out.append(dict(codigo="C-02", gravedad="ALTA", periodo=corte, clave="vigente",
             descripcion=f"Se ha ejecutado el {x['pct_financiero']}% del presupuesto con {x['observado']}% de avance físico observado.",
             regla=f"% financiero - % físico > {U['financiero_vs_fisico_pts']} pts"))
     if contra:
-        out.append(dict(codigo="C-03", gravedad="ALTA" if len(contra) >= 3 else "MEDIA", periodo=_rango(contra),
+        out.append(dict(codigo="C-03", gravedad="ALTA" if len(contra) >= 3 else "MEDIA", periodo=_rango(contra), clave=contra[0],
             descripcion=f"{len(contra)} día(s) en que la bitácora declara maquinaria o personal que la IA no observó.",
             regla="Bitácora con maquinaria operando o personal mayor al detectado por la IA"))
     if clima_mal:
-        out.append(dict(codigo="C-04", gravedad="ALTA" if len(clima_mal) >= 2 else "MEDIA", periodo=_rango(clima_mal),
+        out.append(dict(codigo="C-04", gravedad="ALTA" if len(clima_mal) >= 2 else "MEDIA", periodo=_rango(clima_mal), clave=clima_mal[0],
             descripcion=f"{len(clima_mal)} día(s) en que la bitácora justifica el paro por lluvia fuerte con clima registrado apto.",
             regla="Bitácora: lluvia fuerte · clima consolidado: apto"))
     if x["dias_sin_bitacora"] is not None and x["dias_sin_bitacora"] >= U["dias_sin_bitacora"]:
-        out.append(dict(codigo="C-05", gravedad="MEDIA", periodo=_rango(sin),
+        out.append(dict(codigo="C-05", gravedad="MEDIA", periodo=_rango(sin), clave="vigente",
             descripcion=f"{len(sin)} de los últimos 7 días con actividad en cámara no tienen entrada de bitácora.",
             regla=f">= {U['dias_sin_bitacora']} días sin bitácora en los últimos 7 con registro"))
     return out

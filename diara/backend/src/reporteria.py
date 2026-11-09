@@ -21,13 +21,15 @@ Recuperación y reintentos (pendientes()):
   - diario: solo el del día (no se manda una ráfaga de diarios viejos; el semanal o quincenal los cubre)
   - un período que falla se reintenta en las revisiones siguientes, como máximo MAX_INTENTOS veces
 Correo: texto + HTML con el PDF adjunto. Sin SMTP_HOST, modo "simulado" (el PDF se guarda pero no se envía).
+Salud de la cámara (src/salud_camara.py): cada proyecto lleva sus alertas S-xx, fotos del período y cambios de encuadre
+(_camara); la portada y el correo cuentan las "cámaras con alertas" y las suman a "Requiere atención".
 Los errores de SMTP se traducen a mensajes con la causa probable (explicar_error)."""
 import html, io, re, smtplib, socket, ssl, time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from email.message import EmailMessage
 from email.utils import make_msgid
-from config import REPORTES, APP_URL, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM, SMTP_SEGURIDAD
-from src import metrics, store, proyectos, tablero, imagenes, clima, reporte_pdf, auth
+from config import UMBRALES, REPORTES, APP_URL, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM, SMTP_SEGURIDAD
+from src import metrics, store, proyectos, tablero, imagenes, clima, reporte_pdf, auth, salud_camara
 from src.clima.comun import ahora_cr
 from config import DATA_DIR
 from PIL import Image as PILImage
@@ -164,10 +166,27 @@ def _monto(x):
     """Monto con separador de miles. Se usa "CRC" y no "₡" porque las fuentes estándar del PDF no tienen ese símbolo."""
     return None if x in (None, "") else "CRC " + f"{float(x):,.0f}".replace(",", " ")
 
+def _camara(s, desde, hasta):
+    """Salud de la cámara para el reporte (s = salud_camara.resumen). Las alertas S-xx son las vigentes al emitir el
+    reporte; las fotos y los días sin fotos se cuentan solo dentro del período. Los cambios de encuadre que se listan
+    son los del período más los que siguen "Por revisar" (aunque sean anteriores)."""
+    al = s["alertas"]
+    periodo = [d for d in s["dias"] if _en(d["fecha"], desde, hasta)]
+    h = s["horario"]
+    return dict(alertas=al, n_alertas=len(al), n_altas=sum(a["gravedad"] == "ALTA" for a in al),
+                codigos=sorted({a["codigo"] for a in al}), hay_fotos=s["hay_fotos"],
+                ultima_foto=datetime.strptime(s["ultima_foto"], "%Y-%m-%d %H:%M").strftime("%d/%m/%Y %H:%M") if s["ultima_foto"] else None,
+                dias_sin_fotos=s["dias_sin_fotos"], cobertura_7d=s["cobertura_7d"], esperadas_dia=s["esperadas_dia"],
+                horario=f"{h['desde']} a {h['hasta']} ({h['origen']})",
+                fotos_periodo=sum(d["fotos"] for d in periodo), dias_periodo=len(periodo),
+                dias_sin_fotos_periodo=sum(1 for d in periodo if not d["fotos"]),
+                cambios=[dict(fecha=date.fromisoformat(c["fecha"]).strftime("%d/%m/%Y"), clasificacion=c["clasificacion"], estado=c["estado"])
+                         for c in s["cambios_encuadre"] if _en(c["fecha"], desde, hasta) or c["estado"] == "Por revisar"])
+
 def datos_proyecto(p, desde, hasta):
     """Todo lo de un proyecto que va al PDF. Los indicadores son al último dato disponible; observaciones, aportes y
     clima se filtran por el período (las observaciones sin resolver se incluyen siempre)."""
-    pid = p["id"]; tj = tablero.tarjeta(p)
+    pid = p["id"]; salud = salud_camara.resumen(p); tj = tablero.tarjeta(p, salud)
     x = dict(id=pid, nombre=p["nombre"], ubicacion=p["ubicacion"], institucion=p["institucion"],
              estado=tj.get("estado") or p["estado"], kpis=None, n_alertas=0, n_altas=0, alertas=[], resumen_ia=[], serie=[],
              obs_abiertas=tj.get("obs_abiertas", 0), aportes_pendientes=tj["aportes_pendientes"])
@@ -180,6 +199,7 @@ def datos_proyecto(p, desde, hasta):
         x.update(kpis=k, alertas=al, n_alertas=len(al), n_altas=sum(a["gravedad"] == "ALTA" for a in al),
                  resumen_ia=metrics.resumen_ia(r["d"], k, al), serie=metrics.serie(r["d"]),
                  datos_al=date.fromisoformat(k["ultima_actualizacion"]).strftime("%d/%m/%Y"), texto_estado=r["texto"])
+    x["camara"] = _camara(salud, desde, hasta)
     # clima del período (registro consolidado)
     reg = [c for c in clima.registro(pid, 1000) if _en(c["fecha"], desde, hasta)]
     if reg:
@@ -213,18 +233,28 @@ def preparar(u, frecuencia, hoy=None, solo=None):
     hoy = hoy or hoy_cr(); desde, hasta = periodo(frecuencia, hoy)
     ps = [p for p in proyectos_de(u) if not solo or p["id"] in solo]
     datos = [datos_proyecto(p, desde, hasta) for p in ps]
-    # Orden de urgencia: más alertas altas, luego más alertas, luego mayor atraso
-    datos.sort(key=lambda d: (-(d["n_altas"]), -(d["n_alertas"]), (d["kpis"]["brecha"] or 0) if d["kpis"] else 0))  # brecha None: avance sin medir
+    # Orden de urgencia: más alertas altas (de la obra y de la cámara), luego más alertas, luego mayor atraso
+    datos.sort(key=lambda d: (-(d["n_altas"] + d["camara"]["n_altas"]), -(d["n_alertas"] + d["camara"]["n_alertas"]),
+                              (d["kpis"]["brecha"] or 0) if d["kpis"] else 0))  # brecha None: avance sin medir
     atencion = []
     for d in datos:
         if d["n_altas"]:
             b = d["kpis"]["brecha"] if d["kpis"] else None
             atencion.append(f"{d['nombre']}: {d['n_altas']} alerta(s) de gravedad alta" + (f"; brecha de {b} pts." if b is not None else "."))
+        c = d["camara"]
+        if c["n_altas"]:   # S-06: la cámara dejó de enviar (o nunca envió)
+            atencion.append(f"{d['nombre']}: la cámara no envía fotos desde hace {c['dias_sin_fotos']} día(s) (última: {c['ultima_foto']})."
+                            if c["ultima_foto"] else f"{d['nombre']}: no se ha recibido ninguna foto de la cámara.")
+        elif c["n_alertas"]:
+            atencion.append(f"{d['nombre']}: {c['n_alertas']} alerta(s) de la cámara ({', '.join(c['codigos'])}).")
+        vencidas = sum(a.get("vencida", False) for a in d["alertas"] + c["alertas"])   # ciclo de vida (src/ciclo_alertas.py)
+        if vencidas: atencion.append(f"{d['nombre']}: {vencidas} alerta(s) sin atender hace más de {UMBRALES['plazo_atencion_dias']} días.")
         if d["obs_abiertas"]: atencion.append(f"{d['nombre']}: {d['obs_abiertas']} observación(es) sin resolver.")
         if d["aportes_pendientes"]: atencion.append(f"{d['nombre']}: {d['aportes_pendientes']} aporte(s) ciudadano(s) por revisar.")
     tot = dict(proyectos=len(datos), atrasados=sum(1 for d in datos if d["kpis"] and d["kpis"]["brecha"] is not None and d["kpis"]["brecha"] <= -10),
                alertas_altas=sum(d["n_altas"] for d in datos), obs_abiertas=sum(d["obs_abiertas"] for d in datos),
-               aportes_pendientes=sum(d["aportes_pendientes"] for d in datos))
+               aportes_pendientes=sum(d["aportes_pendientes"] for d in datos),
+               camaras_con_alertas=sum(1 for d in datos if d["camara"]["n_alertas"]))
     return dict(titulo=TITULOS[frecuencia], frecuencia=frecuencia, desde=desde, hasta=hasta, periodo_txt=periodo_txt(desde, hasta), plantilla=ajustes(),
                 emitido_txt=hoy.strftime("%d/%m/%Y"), usuario=u, proyectos=datos, atencion=atencion, totales=tot)
 
@@ -271,7 +301,8 @@ def _html(u, r):
     """Versión HTML del correo (estilos en línea, que es lo que respetan los clientes de correo)."""
     T, col, e = r["totales"], r["plantilla"]["color"], html.escape
     celdas = [("Proyectos", T["proyectos"]), ("Atrasados", T["atrasados"]), ("Alertas altas", T["alertas_altas"]),
-              ("Obs. abiertas", T["obs_abiertas"]), ("Aportes por revisar", T["aportes_pendientes"])]
+              ("Cámaras con alertas", T["camaras_con_alertas"]), ("Obs. abiertas", T["obs_abiertas"]),
+              ("Aportes por revisar", T["aportes_pendientes"])]
     atencion = "".join(f"<li style='margin:4px 0'>{e(a)}</li>" for a in r["atencion"]) or "<li>Sin asuntos pendientes en el período.</li>"
     return f"""<div style="font-family:Segoe UI,Arial,sans-serif;max-width:620px;color:#1c2430">
 <div style="background:{col};color:#fff;padding:14px 18px;border-radius:8px 8px 0 0"><b style="font-size:17px">{e(r['titulo'])}</b><br>
@@ -293,7 +324,8 @@ def _correo(u, pdf, r, nombre_pdf):
     T = r["totales"]
     lineas = [f"Hola, {u['nombre'] or u['correo']}:", "", f"Adjunto el {r['titulo'].lower()} ({r['periodo_txt']}).", "",
               f"Proyectos: {T['proyectos']} | Atrasados: {T['atrasados']} | Alertas de gravedad alta: {T['alertas_altas']} | "
-              f"Observaciones abiertas: {T['obs_abiertas']} | Aportes por revisar: {T['aportes_pendientes']}", ""]
+              f"Cámaras con alertas: {T['camaras_con_alertas']} | Observaciones abiertas: {T['obs_abiertas']} | "
+              f"Aportes por revisar: {T['aportes_pendientes']}", ""]
     lineas += [f"- {a}" for a in r["atencion"]] or ["Sin asuntos pendientes en el período."]
     lineas += ["", f"Panel: {_enlace_panel(u)}", "", "Mensaje automático de dIAra (CGR). Para cambiar la frecuencia de este reporte, contacte a Administración."]
     m.set_content("\n".join(lineas))

@@ -1,7 +1,7 @@
 """Curación de las fotos del ETL: decide cuáles sirven para la IA, las endereza y genera hojas de contacto para revisarlas.
 
 Por qué hace falta (visto en las fotos de Limoncito, sep. 2025 - jul. 2026):
-  - 11 y 12/09/2025: instalación, la cámara apunta a un monitor (se excluye a mano en config.ETL["excluir"]).
+  - 11 y 12/09/2025: instalación, la cámara apunta a un monitor (se excluye a mano: Administración → Proyectos → Editar → Períodos excluidos).
   - 22/09 al 28/10/2025: fotos quemadas, casi blancas (brillo ~254).
   - nov. 2025 a inicios de feb. 2026: lente empañado, todo se ve con neblina (nitidez <= 5).
   - desde el 11/02/2026 (12:27): imagen nítida, pero la cámara cambió de lugar (otro encuadre). En las carpetas por
@@ -13,15 +13,18 @@ Métricas (sobre una miniatura en gris de 400x300, para que no dependan del tama
 Reglas (motivo_ia; si hay al menos un BLOQUEO la foto queda apta_ia = 0). Umbrales en config.ETL:
     bloqueos  sin fecha · período excluido · duplicada · nocturna (radiación 0) · oscura · sobreexpuesta · borrosa/empañada
     avisos    lluvia durante la captura (la foto es apta: la IA debe aprender a ver con lluvia, pero conviene saberlo)
-Versión curada (solo aptas): girada según la cámara (config.ETL["rotacion"]), lado mayor <= lado_max, JPEG sin
-metadatos, en data/etl/curadas/<proyecto>/<día>/<archivo>. El original de Drive no se toca."""
+Versión curada (solo aptas): girada según la cámara (config.ETL["rotacion"] por código de cámara o, si no, la rotación
+de la obra), lado mayor <= lado_max, JPEG sin metadatos, en data/etl/curadas/<proyecto>/<día>/<archivo>. El original
+de Drive no se toca.
+Configuración por obra (rotación, umbral de nitidez y períodos excluidos): se edita en Administración → Proyectos y se
+lee con proyectos.config_etl(pid). Antes estaba en config.ETL."""
 import html
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import datetime, timedelta
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageStat
 from config import ETL, DATA_DIR
-from src import store, etl
+from src import store, etl, proyectos
 
 MINIATURA = (400, 300)  # tamaño fijo para medir: los umbrales de nitidez se calibraron con este tamaño
 
@@ -30,8 +33,9 @@ def medir(ruta):
     g = Image.open(ruta).convert("L"); g.thumbnail(MINIATURA)
     return round(ImageStat.Stat(g).stddev[0], 1), round(ImageStat.Stat(g.filter(ImageFilter.FIND_EDGES)).mean[0], 1)
 
-def decidir(f, contraste, nitidez, clima, excluir):
-    """(apta, motivo) de una foto. `f` es la fila de etl_imagenes; `clima` = (radiación, lluvia) de su hora o None."""
+def decidir(f, contraste, nitidez, clima, excluir, nitidez_min=None):
+    """(apta, motivo) de una foto. `f` es la fila de etl_imagenes; `clima` = (radiación, lluvia) de su hora o None.
+    nitidez_min: umbral de la obra (proyectos.config_etl); None = el general config.ETL["nitidez_min"]."""
     bloqueos, avisos = [], []
     if not f["tomada"]: bloqueos.append("sin fecha de captura")
     bloqueos += [motivo for desde, hasta, motivo in excluir if f["fecha"] and desde <= f["fecha"] <= hasta]
@@ -40,27 +44,32 @@ def decidir(f, contraste, nitidez, clima, excluir):
     if radiacion == 0 or (radiacion is None and f["hora"] and not "05:30" <= f["hora"] <= "18:00"): bloqueos.append("nocturna")
     if f["brillo"] is not None and f["brillo"] < ETL["brillo_oscuro"]: bloqueos.append("oscura")
     if f["brillo"] is not None and f["brillo"] > ETL["brillo_quemado"]: bloqueos.append("sobreexpuesta")
-    minimo = ETL["nitidez_min_obra"].get(f["project_id"], ETL["nitidez_min"])  # cámaras de menor resolución: umbral propio
+    minimo = ETL["nitidez_min"] if nitidez_min is None else nitidez_min  # cámaras de menor resolución: umbral propio de la obra
     if nitidez < minimo and "sobreexpuesta" not in bloqueos: bloqueos.append("borrosa o lente empañado")
     if lluvia is not None and lluvia >= ETL["lluvia_hora_mm"]: avisos.append("aviso: lluvia durante la captura")
     return (0 if bloqueos else 1), ("; ".join(bloqueos + avisos) or None)
 
-def _enderezada(f):
+def _enderezada(f, rotacion_obra=0):
     """Imagen original girada según su cámara (lo que debe ver la IA). Solo se gira el origen 'camara': las fotos de
     imagenes_tratadas YA vienen enderezadas aunque desde feb. 2026 también se llamen IMG_CAM_01_... (girarlas las invertiría)."""
     im = Image.open(DATA_DIR / f["ruta_local"]).convert("RGB")
-    # por cámara (CAM_01) y, si el nombre no trae cámara, por obra (config.ETL["rotacion_obra"])
-    grados = (ETL["rotacion"].get(f["camara"] or "") or ETL["rotacion_obra"].get(f["project_id"], 0)) if f["origen"] == "camara" else 0
+    grados = grados_rotacion(f, rotacion_obra)
     return im.rotate(grados, expand=True) if grados else im
 
-def _curar(pid, f, clima, excluir):
-    """Mide, decide y (si es apta) escribe la versión curada. Devuelve los valores a guardar."""
+def grados_rotacion(f, rotacion_obra=0):
+    """Grados (antihorarios) para enderezar una foto: por código de cámara (CAM_01, config.ETL["rotacion"]) y, si el
+    nombre no trae cámara, la rotación de la obra (Administración). Solo el origen 'camara': imagenes_tratadas ya
+    viene derecha. La usan también src/etl/encuadre.py y las hojas de contacto."""
+    return (ETL["rotacion"].get(f["camara"] or "") or rotacion_obra) if f["origen"] == "camara" else 0
+
+def _curar(pid, f, clima, cfg):
+    """Mide, decide y (si es apta) escribe la versión curada. Devuelve los valores a guardar. cfg = proyectos.config_etl(pid)."""
     contraste, nitidez = medir(DATA_DIR / f["ruta_local"])
-    apta, motivo = decidir(f, contraste, nitidez, clima, excluir)
+    apta, motivo = decidir(f, contraste, nitidez, clima, cfg["excluir"], cfg["nitidez_min"])
     destino = ETL["dir"] / "curadas" / pid / f["fecha"] / f["archivo"] if f["fecha"] else None
     ruta = None
     if apta:
-        im = _enderezada(f); im.thumbnail((ETL["lado_max"], ETL["lado_max"]))
+        im = _enderezada(f, cfg["rotacion"]); im.thumbnail((ETL["lado_max"], ETL["lado_max"]))
         destino.parent.mkdir(parents=True, exist_ok=True); im.save(destino, "JPEG", quality=90)  # sin exif: no se copia
         ruta = destino.relative_to(DATA_DIR).as_posix()
     elif destino and destino.exists():
@@ -75,13 +84,13 @@ def evaluar(pid, rehacer=False, avance=None):
                          + ("" if rehacer else " AND curada IS NULL"), (pid,))
     clima = {r["hora"]: (r["radiacion"], r["lluvia_mm"]) for r in store._filas(
         "SELECT hora, radiacion, lluvia_mm FROM etl_clima_horas WHERE project_id=?", (pid,))}
-    excluir = ETL["excluir"].get(pid, [])
+    cfg = proyectos.config_etl(pid)  # rotación, umbral de nitidez y períodos excluidos de la obra
     def hora_clima(f):  # misma convención que cruce.py: la hora que contiene la foto (16:53 -> 17:00; 23:40 -> 00:00 del día siguiente)
         if not f["tomada"]: return None
         t = datetime.fromisoformat(f["tomada"]); h = t.replace(minute=0, second=0)
         return (h if h == t else h + timedelta(hours=1)).strftime("%Y-%m-%dT%H:00")
     with ThreadPoolExecutor(ETL["hilos"]) as ex:
-        resultados = ex.map(lambda f: (f, _curar(pid, f, clima.get(hora_clima(f)), excluir)), filas)
+        resultados = ex.map(lambda f: (f, _curar(pid, f, clima.get(hora_clima(f)), cfg)), filas)
         valores = []
         for i, (f, r) in enumerate(resultados, 1):
             valores.append((r["contraste"], r["nitidez"], r["apta"], r["motivo"], r["ruta"], f["drive_id"]))
@@ -114,7 +123,7 @@ def _fuente(tam):
     try: return ImageFont.load_default(size=tam)  # Pillow >= 10.1
     except TypeError: return ImageFont.load_default()
 
-def _hoja(pid, fecha, fotos, salida):
+def _hoja(pid, fecha, fotos, salida, rotacion_obra=0):
     """Una imagen con todas las fotos del día: borde verde = apta, amarillo = apta con aviso, rojo = no apta (con el motivo)."""
     filas = -(-len(fotos) // COLUMNAS); alto_txt = 34
     hoja = Image.new("RGB", (CELDA[0] * COLUMNAS, alto_txt + filas * (CELDA[1] + 18)), "white"); d = ImageDraw.Draw(hoja)
@@ -122,7 +131,7 @@ def _hoja(pid, fecha, fotos, salida):
     d.text((8, 8), f"{pid} · {fecha} · {len(fotos)} fotos · {aptas} aptas para IA", fill="black", font=_fuente(16))
     for i, f in enumerate(fotos):
         x, y = (i % COLUMNAS) * CELDA[0], alto_txt + (i // COLUMNAS) * (CELDA[1] + 18)
-        im = _enderezada(f); im.thumbnail((CELDA[0] - 8, CELDA[1] - 8))
+        im = _enderezada(f, rotacion_obra); im.thumbnail((CELDA[0] - 8, CELDA[1] - 8))
         tipo = "no" if not f["apta_ia"] else ("aviso" if f["motivo_ia"] else "apta")
         d.rectangle([x + 1, y + 1, x + CELDA[0] - 2, y + CELDA[1] - 2], outline=COLOR[tipo], width=4)
         hoja.paste(im, (x + 4, y + 4))
@@ -141,7 +150,8 @@ def hojas(pid, desde=None, hasta=None):
     por_dia = {}
     for f in store._filas(sql + " ORDER BY fecha, hora", args): por_dia.setdefault(f["fecha"], []).append(f)
     with ThreadPoolExecutor(ETL["hilos"]) as ex:
-        aptas = dict(zip(por_dia, ex.map(lambda k: _hoja(pid, k, por_dia[k], salida), por_dia)))
+        rotacion = proyectos.config_etl(pid)["rotacion"]
+        aptas = dict(zip(por_dia, ex.map(lambda k: _hoja(pid, k, por_dia[k], salida, rotacion), por_dia)))
     # Índice: tabla de días con enlace a su hoja (se regenera completo con todos los días que tienen hoja)
     dias = sorted(p.stem for p in salida.glob("*.jpg"))
     totales = {r["fecha"]: r for r in store._filas("""SELECT fecha, count(*) n, sum(apta_ia) a, group_concat(DISTINCT origen) o

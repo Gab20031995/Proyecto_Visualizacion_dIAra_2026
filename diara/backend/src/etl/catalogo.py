@@ -146,9 +146,10 @@ def descargar(pid, origenes=("camara",), desde=None, hasta=None, limite=None, hi
                 duplicadas=marcar_duplicados(pid))
 
 def inicio_ventana(pid):
-    """Primer día a descargar en obras con ventana (config.ETL["ventana_dias"]): N días hacia atrás desde la foto más
-    reciente de la cámara. None si la obra no tiene ventana (se baja todo)."""
-    dias = ETL.get("ventana_dias", {}).get(pid)
+    """Primer día a descargar en obras con ventana (Administración → Proyectos → "Ventana de días"): N días hacia atrás
+    desde la foto más reciente de la cámara. None si la obra no tiene ventana (se baja todo)."""
+    from src import proyectos  # import local: proyectos no se necesita en el resto del módulo
+    dias = proyectos.config_etl(pid)["ventana_dias"]
     if not dias: return None
     ult = store._filas("SELECT max(fecha) f FROM etl_imagenes WHERE project_id=? AND origen='camara'", (pid,))[0]["f"]
     return (date.fromisoformat(ult) - timedelta(days=dias - 1)).isoformat() if ult else None

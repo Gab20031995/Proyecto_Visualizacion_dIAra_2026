@@ -10,6 +10,8 @@ Reúne por obra los indicadores para compararlas entre sí:
     pendientes                                observaciones abiertas y aportes por revisar
     empresa ejecutora                         avance que reporta en la bitácora, % del presupuesto ejecutado y
                                               días sin bitácora (src/contratista.py; las alertas C-xx van con las A-xx)
+    salud de la cámara                        alertas S-xx, última foto, días sin fotos y cobertura de los últimos 7
+                                              días (src/salud_camara.py, vía tablero.tarjeta); van aparte de las A-xx/C-xx
 Las obras sin registro de la IA aparecen con los datos que tengan (estado, plazo, pendientes)."""
 import csv, io
 from collections import Counter
@@ -33,7 +35,10 @@ def obra(p, hoy):
              datos=p["datos"], plazo_pct=plazo_pct, dias_restantes=dias_restantes, obs_abiertas=t.get("obs_abiertas", 0),
              aportes_pendientes=t["aportes_pendientes"], ultima_imagen=(t.get("imagen") or {}).get("fecha"),
              previsto=None, observado=None, brecha=None, tendencia_7d=None, productividad=None, alertas=0, alertas_altas=0,
-             alertas_por_codigo={}, dias_sin_datos=None, ultima_actualizacion=None)
+             alertas_por_codigo={}, dias_sin_datos=None, ultima_actualizacion=None,
+             alertas_camara=t["camara"]["alertas"], alertas_camara_altas=t["camara"]["alertas_altas"],
+             alertas_camara_codigos=t["camara"]["codigos"], ultima_foto=t["camara"]["ultima_foto"],
+             dias_sin_fotos=t["camara"]["dias_sin_fotos"], cobertura_7d=t["camara"]["cobertura_7d"])
     cz = None
     if p["datos"]:
         r = metrics.resumen_obra(p["id"]); k = r["kpis"]; d = r["d"]; cz = r["cruce"]
@@ -57,7 +62,7 @@ def resumen():
     hoy = ahora_cr().date()
     filas = [obra(p, hoy) for p in proyectos.listar()]
     alertas = Counter()
-    for f in filas: alertas.update(f["alertas_por_codigo"])
+    for f in filas: alertas.update(f["alertas_por_codigo"]); alertas.update(f["alertas_camara_codigos"])  # A-xx, C-xx y S-xx
     return dict(hoy=hoy.isoformat(), obras=filas,
                 por_estado=dict(Counter(f["estado_obra"] for f in filas)),
                 alertas_por_codigo=dict(sorted(alertas.items())),
@@ -65,7 +70,8 @@ def resumen():
 
 COLUMNAS_CSV = ["id", "nombre", "institucion", "ubicacion", "estado_obra", "previsto", "observado", "brecha", "tendencia_7d",
                 "productividad", "reportado", "pct_financiero", "dias_sin_bitacora", "alertas", "alertas_altas", "dias_sin_datos", "plazo_pct", "dias_restantes", "lluvia_7d",
-                "no_aptos_7d", "obs_abiertas", "aportes_pendientes", "ultima_actualizacion", "ultima_imagen"]
+                "no_aptos_7d", "obs_abiertas", "aportes_pendientes", "ultima_actualizacion", "ultima_imagen",
+                "alertas_camara", "alertas_camara_altas", "ultima_foto", "dias_sin_fotos", "cobertura_7d"]
 
 def csv_bytes():
     """La tabla de seguimiento en CSV (con BOM para que Excel lea bien los acentos)."""

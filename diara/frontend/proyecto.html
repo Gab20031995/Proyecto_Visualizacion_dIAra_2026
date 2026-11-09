@@ -2,8 +2,12 @@
 <!--
   Panel de un proyecto (ruta /proyecto?p=ID). Lo usan auditores (solo sus proyectos asignados) y administradores (todos).
   Una sola página con scroll; el menú de arriba (.subnav) marca la sección visible (panel.js: seguirScroll).
-  Secciones: Resumen · Imágenes · Empresa ejecutora · Clima · Calendario y observaciones · Registros · Aportes ciudadanos.
+  Secciones: Resumen · Imágenes · Cámara · Empresa ejecutora · Clima · Calendario y observaciones · Registros · Aportes ciudadanos.
+  "Cámara" (Salud de la cámara) muestra qué fotos llegaron, cuándo y con qué calidad, los cambios de encuadre y las
+  alertas S-xx (GET /api/auditor/{pid}/salud-camara; reglas en backend/src/salud_camara.py). Se ve también sin datos de IA.
   Las observaciones del auditor se anotan y consultan desde el calendario en ventanas emergentes (formObs, listaObs).
+  Cada alerta (A-xx, C-xx, S-xx) tiene un estado de gestión: "Gestionar" abre gestionarAlerta() y "Historial de alertas"
+  lista también las descartadas y las que ya no se detectan (/api/auditor/{pid}/alertas; backend/src/ciclo_alertas.py).
   Para no saturar la vista: Imágenes está plegada (plegar()), el calendario muestra un mes a la vez,
   el detalle del día muestra una foto a la vez (visor) y Registros muestra los últimos 7 días (con botones para ver más).
   "Empresa ejecutora" muestra lo que DECLARA el contratista (cronograma, bitácora, costos) cruzado con lo que OBSERVA la IA
@@ -29,6 +33,8 @@
 .ia{margin:0;padding-left:18px}.ia li{margin-bottom:6px}
 .alerta{border-left:4px solid var(--wa);padding:8px 12px;border-radius:8px;background:var(--bg);margin-top:8px;font-size:14px}
 .alerta.ALTA{border-color:var(--al)}
+.alerta.vencida{background:#d6454512}   /* sin atender más del plazo (config.UMBRALES["plazo_atencion_dias"]) */
+.alerta .cab-al{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
 
 .galeria{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
 .tira{grid-template-columns:repeat(4,1fr)}
@@ -76,6 +82,13 @@ tr.contradice td{background:#d645450f}
 .obs-item select{width:auto;padding:5px 8px;font-size:13px}
 .modal img.grande{width:100%;border-radius:10px;display:block}
 .sin-datos{text-align:center;padding:48px 16px}
+/* Salud de la cámara: mapa de calor día x hora (SVG; se desplaza en horizontal si hay muchos días) */
+.cam-mapa{overflow-x:auto;padding-bottom:4px}.cam-mapa svg{display:block}
+.cam-mapa text{font-size:10px;fill:var(--mu)}.cam-mapa .dia-sin{fill:var(--mu);opacity:.13}
+.cam-mapa .linea-h{stroke:var(--wa);stroke-dasharray:3 3}.cam-mapa .cambio{stroke:var(--al);stroke-width:1.5;stroke-dasharray:4 3}
+.enc{display:grid;grid-template-columns:150px 1fr;gap:12px;border-top:1px solid var(--bd);padding:10px 0}.enc:first-child{border-top:0;padding-top:0}
+.enc img{width:150px;border-radius:8px;cursor:zoom-in;display:block}
+@media(max-width:640px){.enc{grid-template-columns:1fr}.enc img{width:100%}}
 </style>
 </head>
 <body>
@@ -88,7 +101,7 @@ tr.contradice td{background:#d645450f}
   <button class="sm" id="salir">Salir</button>
 </header>
 <div class="subnav" role="navigation" aria-label="Secciones del panel"><div class="in">
-  <a href="#resumen">Resumen</a><a href="#imagenes">Imágenes</a><a href="#empresa">Empresa ejecutora</a><a href="#clima">Clima</a>
+  <a href="#resumen">Resumen</a><a href="#imagenes">Imágenes</a><a href="#camara">Cámara</a><a href="#empresa">Empresa ejecutora</a><a href="#clima">Clima</a>
   <a href="#calendario">Calendario y observaciones</a><a href="#registros">Registros</a><a href="#aportes">Aportes ciudadanos</a>
 </div></div>
 
@@ -107,7 +120,7 @@ tr.contradice td{background:#d645450f}
         <p class="mu" style="margin:10px 0 0">Generado a partir de las detecciones, el cronograma y el clima. Es un apoyo: valide con las imágenes.</p></div>
       <div class="card"><h3>Avance previsto vs. observado</h3><div id="graf"></div></div>
     </div>
-    <div class="card sec"><h3>Alertas activas</h3><div id="alertas"></div>
+    <div class="card sec"><div class="tit" style="margin-bottom:6px"><h3 style="margin:0">Alertas activas</h3><button class="sm" data-historial-alertas>📋 Historial de alertas</button></div><div id="alertas"></div>
       <p class="mu" style="margin:8px 0 0">Una alerta indica necesidad de revisión, no prueba automática de incumplimiento.</p></div>
   </section>
 
@@ -117,6 +130,21 @@ tr.contradice td{background:#d645450f}
     <div class="tit"><div><h2>Imágenes <span class="mu" id="img-n"></span></h2><p class="mu">Capturas de la cámara con las detecciones de la IA. Recuadro rojo = confianza baja.</p></div>
       <button class="sm" data-plegar="imagenes" aria-expanded="false" aria-controls="img-cuerpo">Mostrar ▾</button></div>
     <div class="cuerpo" id="img-cuerpo" hidden><div class="galeria" id="galeria"></div></div>
+  </section>
+
+  <!-- SALUD DE LA CÁMARA: qué fotos llegaron, cuándo y con qué calidad (ítems EDA-01 y ALE-03 del backlog) -->
+  <section class="bloque" id="camara">
+    <div class="tit"><div><h2>Salud de la cámara</h2><p class="mu">Qué fotos llegaron, cuándo y con qué calidad. Una alerta de cámara indica que la evidencia se está perdiendo o cambió; no dice nada del avance de la obra.</p></div></div>
+    <div class="kpis" id="cam-kpis"><p class="vacio-msg">Cargando…</p></div>
+    <div class="card sec"><div class="tit" style="margin-bottom:6px"><h3 style="margin:0">Alertas de la cámara</h3><button class="sm" data-historial-alertas>📋 Historial de alertas</button></div><div id="cam-alertas"></div></div>
+    <div class="card sec"><h3>Fotos por día y hora</h3>
+      <p class="mu" style="margin-top:0">Cada columna es un día y cada fila una hora: más intenso = más fotos. Gris = día sin fotos. Líneas ámbar = horario de captura. Línea roja = cambio de encuadre. La franja de abajo es la calidad: verde, alguna foto apta para la IA; ámbar, ninguna apta; gris, sin evaluar. Pase el mouse por un día para ver el detalle.</p>
+      <div class="cam-mapa" id="cam-mapa"></div></div>
+    <div class="grid g2 sec">
+      <div class="card"><h3>Días sin fotos</h3><div id="cam-huecos"></div></div>
+      <div class="card"><h3>Cambios de encuadre</h3><div id="cam-encuadre"></div>
+        <p class="mu" style="margin:8px 0 0">Detectados comparando el encuadre de una semana con la siguiente (<code>etl_imagenes.py encuadre</code>). Una diferencia visual no prueba por sí sola que la cámara se movió: confirme o descarte cada caso mirando las fotos.</p></div>
+    </div>
   </section>
 
   <!-- Las OBSERVACIONES no tienen sección propia: se registran y consultan desde el calendario en ventanas emergentes
@@ -208,7 +236,8 @@ tr.contradice td{background:#d645450f}
      aportes   /aportes                    diaSel    día seleccionado en el calendario
      mes       mes que muestra el calendario (AAAA-MM)      imgsDia / idxDia   fotos del día abierto y la que se ve en el visor
      regN      cuántos días muestra la tabla de Registros (7, y crece con "Mostrar 7 más") */
-var S = { pid: null, resumen: null, imagenes: [], diario: null, obs: [], aportes: null, diaSel: null, mes: null, imgsDia: [], idxDia: 0, regN: 7 };
+var S = { pid: null, resumen: null, imagenes: [], diario: null, obs: [], aportes: null, diaSel: null, mes: null, imgsDia: [], idxDia: 0, regN: 7,
+          alertas: {} };  /* alertas: {id: alerta} de lo ya mostrado, para la ventana "Gestionar" (ciclo de vida, ALE-01) */
 /* A("/resumen") -> "/api/auditor/P-001/resumen" (rutas de la API del proyecto abierto) */
 var A = function (r) { return "/api/auditor/" + encodeURIComponent(S.pid) + r };
 /* Patrón de cada sección: pintarX() genera el HTML desde S (siempre escapando con esc()); cargarX() pide a la API y pinta. */
@@ -293,9 +322,7 @@ function pintarResumen() {
     kpi("Alertas activas", al.length, al.length ? "mal" : "bien");
   $("#ia").innerHTML = r.resumen_ia.map(function (t) { return "<li>" + esc(t) + "</li>" }).join("");
   $("#graf").innerHTML = graficoAvance(r.serie, k.brecha);
-  $("#alertas").innerHTML = al.length ? al.map(function (a) {
-    return '<div class="alerta ' + a.gravedad + '"><b>' + esc(a.codigo) + " · " + esc(a.gravedad) + '</b> <span class="mu">· ' + esc(a.periodo) + "</span><div>" + esc(a.descripcion) + "</div></div>"
-  }).join("") : '<p class="vacio-msg">✅ Sin alertas activas.</p>';
+  pintarAlertas("#alertas", al, "✅ Sin alertas activas.");
   ["#dl-pdf", "#dl-pdf2"].forEach(function (s) { $(s).href = A("/reporte.pdf") }); $("#dl-xlsx").href = A("/matriz.xlsx");
 }
 
@@ -673,6 +700,160 @@ function pintarRegistros() {
 }
 $("#solo-reg").onchange = function () { S.regN = 7; pintarRegistros() };
 
+/* ---------- CICLO DE VIDA DE LAS ALERTAS (ALE-01) ---------- */
+/* Cada alerta llega con id, estado, dias_abierta y vencida (backend/src/ciclo_alertas.py). Las descartadas no llegan:
+   se ven en "Historial de alertas". Estados y motivo obligatorio: deben coincidir con ciclo_alertas.ESTADOS y CON_MOTIVO. */
+var ESTADOS_ALERTA = { "Abierta": "b-n", "En revisión": "b-b", "Justificación solicitada": "b-o", "Confirmada": "b-r", "Descartada": "b-n" };
+var CON_MOTIVO = ["Justificación solicitada", "Confirmada", "Descartada"];
+var AYUDA_ESTADO = {
+  "En revisión": "La está revisando (mirando las fotos, el clima, la bitácora…).",
+  "Justificación solicitada": "Se pidió explicación a la empresa ejecutora.",
+  "Confirmada": "Verificó que el problema es real. Sigue contándose y aparece en los reportes.",
+  "Descartada": "Falsa alarma: deja de contarse en tarjetas, Seguimiento y reportes. Se reabre sola si sube a gravedad ALTA.",
+  "Abierta": "Vuelve a quedar pendiente."
+};
+function badgeAlerta(a) {
+  return '<span class="badge ' + (ESTADOS_ALERTA[a.estado] || "b-n") + '">' + esc(a.estado || "Abierta") + "</span>" +
+    (a.vencida ? ' <span class="badge b-r" title="Abierta o en revisión hace ' + a.dias_abierta + ' días">⏰ vencida</span>' : "");
+}
+/* Lista de alertas con su estado y el botón "Gestionar" (mismo formato para las de la obra y las de la cámara) */
+function pintarAlertas(sel, lista, vacio) {
+  lista.forEach(function (a) { if (a.id) S.alertas[a.id] = a });
+  $(sel).innerHTML = lista.length ? lista.map(function (a) {
+    return '<div class="alerta ' + a.gravedad + (a.vencida ? " vencida" : "") + '"><div class="cab-al"><div><b>' + esc(a.codigo) + " · " + esc(a.gravedad) +
+      '</b> <span class="mu">· ' + esc(a.periodo) + "</span> " + badgeAlerta(a) + "</div>" +
+      (a.id ? '<button class="sm" data-alerta="' + a.id + '">Gestionar</button>' : "") + "</div><div>" + esc(a.descripcion) + "</div></div>"
+  }).join("") : '<p class="vacio-msg">' + vacio + "</p>";
+  $$("[data-alerta]", $(sel)).forEach(function (b) { b.onclick = function () { gestionarAlerta(+b.dataset.alerta) } });
+}
+/* Ventana para cambiar el estado: estado nuevo, motivo (obligatorio en algunos) e historial de cambios de la alerta */
+function gestionarAlerta(id, desdeHistorial) {
+  var a = S.alertas[id];
+  if (!a) return toast("Alerta no encontrada: recargue la página");
+  api(A("/alertas/" + id + "/historial")).then(function (H) {
+    var opciones = Object.keys(ESTADOS_ALERTA).filter(function (e) { return e !== a.estado });
+    abrirModal("<h2>" + esc(a.codigo) + " · " + esc(a.gravedad) + '</h2><p class="mu" style="margin-top:0">' + esc(a.periodo) + " · detectada desde " + fmtFecha(a.primera_deteccion) + " · " + badgeAlerta(a) + "</p>" +
+      "<p>" + esc(a.descripcion) + "</p>" +
+      '<label for="al-estado">Nuevo estado</label><select id="al-estado">' + opciones.map(function (e) { return "<option>" + esc(e) + "</option>" }).join("") + "</select>" +
+      '<p class="mu" id="al-ayuda" style="margin:6px 0 0"></p>' +
+      '<label for="al-motivo" id="al-etq">Motivo</label><textarea id="al-motivo" style="min-height:70px" placeholder="Qué se revisó y qué se concluyó"></textarea>' +
+      '<p class="err" id="al-err"></p><p style="margin:10px 0 0"><button class="pri" id="al-guardar">Guardar</button> <button data-cerrar>Cancelar</button></p>' +
+      "<h3 class='sec'>Historial de esta alerta</h3>" + (H.length ? H.map(function (h) {
+        return '<div class="obs-item"><span class="mu">' + esc(String(h.fecha).slice(0, 16)) + " UTC · " + esc(h.usuario || "sistema") + "</span><br>" +
+          (h.estado_anterior ? esc(h.estado_anterior) + " → " : "") + "<b>" + esc(h.estado_nuevo) + "</b>" + (h.motivo ? "<br>" + esc(h.motivo) : "") + "</div>"
+      }).join("") : '<p class="vacio-msg">Sin cambios todavía: la alerta está como la detectó el sistema.</p>'), true);
+    function ayuda() {
+      var e = $("#al-estado").value; $("#al-ayuda").textContent = AYUDA_ESTADO[e] || "";
+      $("#al-etq").textContent = "Motivo" + (CON_MOTIVO.indexOf(e) >= 0 ? " (obligatorio)" : " (opcional)");
+    }
+    $("#al-estado").onchange = ayuda; ayuda();
+    $("#al-guardar").onclick = function () {
+      var b = this; b.disabled = true;
+      api(A("/alertas/" + id), { method: "PATCH", json: { estado: $("#al-estado").value, motivo: $("#al-motivo").value } })
+        .then(function () { cerrarModal(); toast("Alerta " + a.codigo + ": " + $("#al-estado").value.toLowerCase()); return recargarAlertas().then(function () { if (desdeHistorial) historialAlertas() }) })
+        .catch(function (e) { $("#al-err").textContent = e.message; b.disabled = false });
+    };
+  }).catch(function (e) { toast(e.message) });
+}
+/* Todas las alertas de la obra, también descartadas y las que ya no se detectan */
+function historialAlertas() {
+  api(A("/alertas")).then(function (L) {
+    L.forEach(function (a) { S.alertas[a.id] = a });
+    abrirModal("<h2>Historial de alertas</h2><p class='mu' style='margin-top:0'>Todas las alertas que detectó el sistema en esta obra, con su estado de gestión. “Ya no se detecta”: la situación que la originó terminó.</p>" +
+      (L.length ? '<div class="tabla"><table><thead><tr><th>Alerta</th><th>Período</th><th>Estado</th><th>Situación</th><th class="num">Cambios</th><th></th></tr></thead><tbody>' + L.map(function (a) {
+        return "<tr><td><b>" + esc(a.codigo) + "</b> " + esc(a.gravedad) + '<br><span class="mu">' + esc(a.descripcion.slice(0, 90)) + (a.descripcion.length > 90 ? "…" : "") + "</span></td><td>" + esc(a.periodo) + "</td><td>" + badgeAlerta(a) + "</td>" +
+          "<td>" + (a.activa ? '<span class="badge b-o">Se detecta</span>' : '<span class="badge b-g">Ya no se detecta</span>') + '<br><span class="mu">' + fmtFecha(a.primera_deteccion) + " a " + fmtFecha(a.ultima_deteccion) + "</span></td>" +
+          '<td class="num">' + a.cambios + '</td><td><button class="sm" data-hist-al="' + a.id + '">Gestionar</button></td></tr>'
+      }).join("") + "</tbody></table></div>" : '<p class="vacio-msg">Esta obra todavía no tiene alertas registradas.</p>'));
+    $$("[data-hist-al]").forEach(function (b) { b.onclick = function () { gestionarAlerta(+b.dataset.histAl, true) } });
+  }).catch(function (e) { toast(e.message) });
+}
+$$("[data-historial-alertas]").forEach(function (b) { b.onclick = historialAlertas });
+/* Después de un cambio: vuelve a pedir el resumen (alertas de la obra) y la salud de la cámara */
+function recargarAlertas() {
+  return Promise.all([S.resumen ? api(A("/resumen")).then(function (r) { S.resumen = r; pintarResumen() }) : null, cargarCamara()]);
+}
+
+/* ---------- SALUD DE LA CÁMARA ---------- */
+/* S.camara = respuesta de /salud-camara (backend/src/salud_camara.py, resumen): dias [{fecha, fotos, horas[24], aptas,
+   curadas, motivo, cobertura}], huecos, horario, cambios_encuadre y alertas S-xx (mismo formato que las A-xx). */
+function pintarCamara() {
+  var c = S.camara, h = c.horario;
+  var origen = { configurado: "configurado", observado: "observado (no configurado)", "24 h": "24 h (no configurado)" }[h.origen];
+  $("#cam-kpis").innerHTML = c.hay_fotos ?
+    kpi("Última foto", fmtFecha(c.ultima_foto) + " " + c.ultima_foto.slice(11), c.dias_sin_fotos > 2 ? "mal" : "bien", "Hace " + c.dias_sin_fotos + " día(s)") +
+    kpi("Días desde la última foto", c.dias_sin_fotos, c.dias_sin_fotos > 2 ? "mal" : "bien") +
+    kpi("Horario de captura", h.desde + " a " + h.hasta, "", "Horario " + origen) +
+    kpi("Fotos esperadas por día", c.esperadas_dia == null ? "—" : c.esperadas_dia, "", c.esperadas_dia == null ? "Configure la frecuencia de captura en Administración → Proyectos → Editar" : "") +
+    kpi("Cobertura últimos 7 días", c.cobertura_7d == null ? "—" : c.cobertura_7d + "%", c.cobertura_7d != null && c.cobertura_7d < 60 ? "mal" : "", "Fotos recibidas ÷ esperadas en el horario de captura") +
+    kpi("Fotos registradas", c.total_fotos.toLocaleString("es-CR"), "", "Del " + fmtFecha(c.desde) + " al " + fmtFecha(c.hasta))
+    : '<div class="card" style="grid-column:1/-1"><p class="vacio-msg" style="margin:0">📷 Todavía no se ha recibido ninguna foto de esta cámara.</p></div>';
+  pintarAlertas("#cam-alertas", c.alertas, "✅ La cámara no tiene alertas.");
+  $("#cam-mapa").innerHTML = c.dias.length ? mapaCamara(c) : '<p class="vacio-msg">Sin fotos para mostrar.</p>';
+  $("#cam-huecos").innerHTML = c.huecos.length ? '<p class="mu" style="margin-top:0">' + c.dias_sin_fotos_total + " día(s) sin fotos en el período mostrado. Los más largos:</p>" +
+    '<div class="tabla"><table><thead><tr><th>Desde</th><th>Hasta</th><th class="num">Días</th></tr></thead><tbody>' + c.huecos.map(function (x) {
+      return "<tr><td>" + fmtFecha(x.desde) + "</td><td>" + fmtFecha(x.hasta) + '</td><td class="num">' + x.dias + "</td></tr>" }).join("") + "</tbody></table></div>"
+    : '<p class="vacio-msg">' + (c.hay_fotos ? "✅ Ningún día sin fotos en el período." : "—") + "</p>";
+  pintarEncuadre();
+}
+/* Mapa de calor: columnas = días, filas = horas (0 arriba). Sin librerías: SVG armado a mano, como graficoAvance. */
+function mapaCamara(c) {
+  var D = c.dias, n = D.length, cw = n > 200 ? 3 : n > 90 ? 5 : n > 40 ? 9 : 14, ch = 9, izq = 34, arr = 16, alto = arr + 24 * ch, abajo = alto + 14;
+  var max = Math.max.apply(null, D.map(function (d) { return Math.max.apply(null, d.horas) })) || 1;
+  var col = function (i) { return izq + i * cw };
+  var out = [], meses = {};
+  D.forEach(function (d, i) {
+    var x = col(i);
+    if (!d.fotos) out.push('<rect class="dia-sin" x="' + x + '" y="' + arr + '" width="' + cw + '" height="' + 24 * ch + '"/>');
+    d.horas.forEach(function (v, hh) { if (v) out.push('<rect x="' + x + '" y="' + (arr + hh * ch) + '" width="' + cw + '" height="' + ch + '" fill="var(--pr)" opacity="' + (0.18 + 0.82 * Math.sqrt(v / max)).toFixed(2) + '"/>') });
+    var q = !d.fotos ? null : d.aptas ? "var(--ok)" : d.curadas ? "var(--wa)" : "var(--bd)";   /* franja de calidad */
+    if (q) out.push('<rect x="' + x + '" y="' + (alto + 4) + '" width="' + cw + '" height="8" fill="' + q + '"/>');
+    var m = d.fecha.slice(0, 7); if (!(m in meses)) meses[m] = i;
+    /* Rectángulo transparente por día, con el detalle al pasar el mouse */
+    out.push('<rect x="' + x + '" y="' + arr + '" width="' + cw + '" height="' + (abajo - arr) + '" fill="transparent"><title>' + esc(fmtFecha(d.fecha) + " (" + diaSemana(d.fecha) + "): " + d.fotos + " foto(s)" +
+      (d.curadas ? " · " + d.aptas + " de " + d.curadas + " aptas para la IA" : "") + (d.motivo ? " · motivo: " + d.motivo : "") + (d.cobertura != null ? " · cobertura " + d.cobertura + "%" : "")) + "</title></rect>");
+  });
+  Object.keys(meses).forEach(function (m) { var p = m.split("-"); out.push('<text x="' + col(meses[m]) + '" y="11">' + MESES[+p[1] - 1].slice(0, 3) + " " + p[0].slice(2) + "</text>") });
+  for (var hh = 0; hh < 24; hh += 3) out.push('<text x="0" y="' + (arr + hh * ch + 8) + '">' + (hh < 10 ? "0" : "") + hh + ":00</text>");
+  [c.horario.desde, c.horario.hasta].forEach(function (t, k) {   /* horario de captura: borde superior de "desde" e inferior de "hasta" */
+    var y = arr + (parseInt(t, 10) + k) * ch; out.push('<line class="linea-h" x1="' + izq + '" x2="' + col(n) + '" y1="' + y + '" y2="' + y + '"/>');
+  });
+  var fechas = D.map(function (d) { return d.fecha });
+  c.cambios_encuadre.forEach(function (e) {
+    var i = fechas.indexOf(e.fecha);
+    if (i >= 0) out.push('<line class="cambio" x1="' + col(i) + '" x2="' + col(i) + '" y1="' + arr + '" y2="' + alto + '"><title>Cambio de encuadre: ' + esc(fmtFecha(e.fecha)) + "</title></line>");
+  });
+  return '<svg width="' + (col(n) + 4) + '" height="' + (abajo + 4) + '" role="img" aria-label="Fotos recibidas por día y hora">' + out.join("") + "</svg>";
+}
+/* Cambios de encuadre: miniatura del panel antes/después y botones para confirmar o descartar (deja de alertar S-03) */
+function pintarEncuadre() {
+  var E = S.camara.cambios_encuadre, clase = { "Por revisar": "b-o", "Confirmado": "b-r", "Descartado": "b-n" };
+  var etiqueta = { Confirmado: "✔ Confirmar", Descartado: "✖ Descartar", "Por revisar": "↺ Volver a por revisar" };
+  $("#cam-encuadre").innerHTML = E.length ? E.map(function (e) {
+    var botones = ["Confirmado", "Descartado", "Por revisar"].filter(function (x) { return x !== e.estado }).map(function (x) {
+      return '<button class="sm" data-enc="' + esc(e.fecha) + '" data-e="' + x + '">' + etiqueta[x] + "</button>" }).join(" ");
+    return '<div class="enc">' + (e.url ? '<img src="' + esc(e.url) + '" alt="Antes y después del ' + esc(e.fecha) + '" data-panel="' + esc(e.url) + '">' : "<span></span>") +
+      "<div><b>" + fmtFecha(e.fecha) + '</b> <span class="badge ' + (clase[e.estado] || "b-n") + '">' + esc(e.estado) + "</span>" +
+      '<div style="margin:4px 0">' + esc(e.clasificacion) + "</div>" +
+      '<div class="mu">Entre el ' + fmtFecha(e.ultima_fecha_antes) + " y el " + fmtFecha(e.fecha) + (e.dias_sin_fotos ? " (" + e.dias_sin_fotos + " día(s) sin fotos en medio)" : "") +
+      " · disimilitud " + e.disimilitud + " · desplazamiento (" + e.desplazamiento_x + ", " + e.desplazamiento_y + ") px" +
+      (e.revisado_por ? " · revisado por " + esc(e.revisado_por) : "") + '</div><p style="margin:8px 0 0">' + botones + "</p></div></div>"
+  }).join("") : '<p class="vacio-msg">' + (S.camara.hay_fotos ? "No se detectaron cambios de encuadre (o aún no se ejecutó el análisis)." : "—") + "</p>";
+  $$("#cam-encuadre img[data-panel]").forEach(function (i) { i.onclick = function () { abrirModal('<img class="grande" src="' + esc(i.dataset.panel) + '" alt="Panel antes y después">') } });
+  $$("#cam-encuadre [data-enc]").forEach(function (b) {
+    b.onclick = function () {
+      api(A("/encuadre/" + b.dataset.enc), { method: "PATCH", json: { estado: b.dataset.e } })
+        .then(function () { toast("Cambio de encuadre: " + b.dataset.e.toLowerCase()); return cargarCamara() }).catch(function (e) { toast(e.message) });
+    };
+  });
+}
+function cargarCamara() {
+  return api(A("/salud-camara")).then(function (c) {
+    S.camara = c; pintarCamara();
+    $('.subnav a[href="#camara"]').textContent = "Cámara" + (c.alertas.length ? " (" + c.alertas.length + ")" : "");
+  }).catch(function (e) { $("#cam-kpis").innerHTML = '<p class="vacio-msg">No se pudo cargar la salud de la cámara: ' + esc(e.message) + "</p>" });
+}
+
 /* ---------- APORTES CIUDADANOS ---------- */
 /* Moderación: "Aprobar y publicar" (estado Revisado) los muestra en el sitio público. El contacto solo se ve aquí. */
 function pintarAportes() {
@@ -720,7 +901,7 @@ function modoSinDatos(p) {
     S.imagenes = l; pintarImagenes();
     if (!l.length) $("#galeria").innerHTML = '<p class="vacio-msg">Todavía no se han recibido imágenes de la cámara.</p>';
     seguirScroll();
-    return Promise.all([cargarObs(), cargarAportes(), cargarClimaReal(), cargarEmpresa()]);
+    return Promise.all([cargarObs(), cargarAportes(), cargarClimaReal(), cargarEmpresa(), cargarCamara()]);
   });
 }
 
@@ -753,7 +934,8 @@ api("/api/yo").then(function (yo) {
       if (h === "#imagenes") plegar("imagenes", true);
       var t = $(h === "#observaciones" ? "#calendario" : h); if (t) t.scrollIntoView();
     }
-    return Promise.all([cargarObs().then(function () { if (h === "#observaciones") listaObs(null, "abiertas") }), cargarAportes(), cargarClimaReal(), cargarEmpresa()]);
+    return Promise.all([cargarObs().then(function () { if (h === "#observaciones") listaObs(null, "abiertas") }), cargarAportes(), cargarClimaReal(), cargarEmpresa(),
+      cargarCamara().then(function () { if (h === "#camara") $("#camara").scrollIntoView() })]);   /* llega tarde: se vuelve a ubicar */
   });
 }).catch(function (e) { if (e.message !== "sesion") toast("Error al cargar el panel: " + e.message) });
 </script>

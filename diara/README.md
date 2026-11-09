@@ -72,6 +72,7 @@ también `$env:SECRET_KEY`; si no, las sesiones se cierran cada vez que se reini
       make_data.py          Genera los datos sintéticos de cada obra
       demo_contratista.py   Carga una empresa ejecutora de ejemplo (no usar en producción)
       enviar_reportes.py    Envía los reportes por correo que tocan hoy (programarlo 1 vez al día)
+    tests/                  Pruebas automáticas (pytest); ver «Pruebas automáticas»
     data/
       proyectos.csv         Carga inicial de la tabla proyectos (solo la primera vez)
       obras/<id>/           diario.csv y camara/ de cada obra (una obra sin carpeta = "sin datos")
@@ -89,7 +90,13 @@ tabla la primera vez que arranca el servidor. Desde **+ Nuevo proyecto** o **✏
 - **Ubicación**: provincia, cantón, distrito, señas, **latitud y longitud** (obligatorias). Se validan dentro de
   Costa Rica (incluida la Isla del Coco), con vista previa en el mapa y botón "Usar mi ubicación" para visitas de campo.
   Las coordenadas se usan para el clima de Google; "Probar clima" confirma que responden.
-- **Cámara y datos**: código de cámara y **token de la API de imágenes**.
+- **Cámara y datos**: código de cámara, **token de la API de imágenes** y la **captura esperada**: cada cuántos minutos
+  toma foto y en qué horario (sin horario = 24 h). El formulario muestra las **fotos esperadas por día**
+  (`proyectos.fotos_esperadas_dia`), base para medir la cobertura de la cámara y detectar cámaras caídas.
+- **Imágenes desde Google Drive (ETL)**: carpeta de Drive (se puede pegar el enlace), rotación de las fotos, nitidez
+  mínima propia (cámaras de baja resolución), ventana de días y **períodos excluidos** (`desde | hasta | motivo`).
+  Antes estaban escritos en `config.ETL`; al primer arranque con esta versión se copian a la base **una sola vez**
+  (`store._copiar_config_etl`) y desde entonces se editan solo aquí. El ETL los lee con `proyectos.config_etl(pid)`.
 
 La lista se filtra por estado (por defecto, solo las **activas**) y se busca por nombre, institución, ubicación o ID.
 
@@ -113,6 +120,65 @@ los últimos 7 registros** (▲ recupera / ▼ se atrasa más), alertas por grav
 (requiere fechas de inicio y fin), días desde el último dato de la cámara, lluvia y días no aptos de la última semana,
 observaciones abiertas y aportes por revisar. Incluye conteo por estado, gráfico de brecha por obra, alertas activas
 por tipo (A-01 a A-04), los últimos cambios de estado y exportación a CSV (`/api/admin/seguimiento.csv`).
+
+## Alertas: inactividad con datos reales (A-05) y ciclo de vida
+**A-05, días hábiles sin actividad visible** (`src/alerts.py`). A-01 depende de la maquinaria, que la IA no mide en las
+obras reales. A-05 usa lo que sí se mide: personas detectadas y el **índice de cambio** entre fotos seguidas (columna
+`cambio_mediana` de `diario.csv`, la agrega `etl_imagenes.py publicar`).
+- Alerta con 3 días hábiles seguidos (lunes a sábado, no feriados, clima apto, con fotos aptas) sin personas y con índice
+  de cambio < 5 (ALTA desde 6 días). Umbrales en `config.UMBRALES`; feriados en `config.FERIADOS` (Jueves y Viernes
+  Santo se calculan cada año). Verificar los feriados con el Ministerio de Trabajo.
+- Domingos, feriados, días de lluvia y días sin fotos aptas no cuentan ni cortan la racha. Un día **sin índice de
+  cambio** (fotos muy separadas, como en Ticabán) la corta: sin esa señal no se concluye nada.
+- Con los datos actuales no se dispara en ninguna obra (tampoco simulando cada día de su historia). Límites: no ve
+  obreros en zonas techadas u oscuras (Limoncito desde abril 2026) y en el Puente cuenta peatones.
+
+**Ciclo de vida de las alertas** (`src/ciclo_alertas.py`; tablas `alertas` y `alertas_historial`). Toda alerta A-xx,
+C-xx y S-xx se guarda e identifica de un día a otro por (obra, código, clave). En el panel, **Gestionar** cambia su
+estado y **Historial de alertas** muestra todas, también las descartadas y las que ya no se detectan.
+
+| Estado | Significado | Motivo |
+|---|---|---|
+| Abierta | Recién detectada (inicial) | — |
+| En revisión | El auditor la está revisando | Opcional |
+| Justificación solicitada | Se pidió explicación a la empresa (la respuesta llegará con el ítem CON-01 del backlog) | Obligatorio |
+| Confirmada | El problema es real | Obligatorio |
+| Descartada | Falsa alarma: **deja de contarse** en tarjetas, Seguimiento, PDF y correo | Obligatorio |
+
+- Cada cambio queda en el historial (quién, cuándo, de qué a qué y por qué).
+- Una descartada que **sube a ALTA se reabre sola**. Una que deja de detectarse queda "ya no se detecta"; si vuelve,
+  conserva su estado.
+- **Vencida**: Abierta o En revisión por más de `plazo_atencion_dias` (5) desde que el sistema la detectó. Se resalta en
+  el panel, se avisa en los Home y en "Requiere atención" del PDF y del correo. El PDF muestra el estado de cada alerta.
+- La empresa ejecutora no ve ni gestiona alertas.
+
+## Salud de la cámara (panel del proyecto → Cámara)
+Responde a lo que preguntó la CGR con Limoncito: "¿la obra terminó o la cámara dejó de funcionar?" (`src/salud_camara.py`).
+Cuenta todas las fotos que llegaron: el catálogo de Drive del ETL (aunque no se hayan descargado), las de la API de
+cámaras y las sintéticas de las obras de ejemplo. Cada instante de captura cuenta una sola vez.
+- **Indicadores**: última foto, días desde la última foto, horario de captura (el configurado en el proyecto o, si no
+  hay, el observado), fotos esperadas por día, cobertura de los últimos 7 días (recibidas ÷ esperadas) y total.
+- **Mapa de calor día × hora** (como en los colabs): días sin fotos en gris, horario de captura, cambios de encuadre en
+  rojo y una franja de calidad (verde: alguna foto apta para la IA; ámbar: ninguna; gris: sin evaluar).
+- **Días sin fotos** (los 10 intervalos más largos) y **cambios de encuadre** con su panel antes/después y botones
+  para confirmarlos o descartarlos (queda quién y cuándo).
+- Se ve también en obras sin registro diario de la IA. La empresa ejecutora no tiene acceso.
+
+**Alertas de cámara S-xx** (umbrales en `config.SALUD_CAMARA`). Van **aparte** de las A-xx y C-xx porque hablan de la
+evidencia, no del avance. Se muestran en el panel, en las tarjetas y avisos de ambos Home y en el Seguimiento (columna
+"Cámara", también en el CSV), en el reporte PDF y en el correo (ver «Reportes automáticos por correo»).
+
+| Código | Regla | Cuándo aplica |
+|---|---|---|
+| S-01 | 3 h del horario de captura sin fotos (una cámara de día no "se cae" de noche) | Obra en ejecución |
+| S-02 | 3 de los últimos 7 días con menos del 60 % de las fotos esperadas (requiere la frecuencia configurada) | Obra en ejecución |
+| S-03 | Cambio de encuadre detectado y todavía "Por revisar" | Siempre |
+| S-04 | 3 días seguidos con fotos, pero ninguna apta para la IA (lente empañado, quemadas…) | Obra en ejecución |
+| S-05 | Las fotos de la API llegan más de 30 min después de su hora de captura (mediana, 7 días) | Siempre |
+| S-06 (ALTA) | 3 días sin ninguna foto, o nunca llegó una (cámara caída o retirada). Si está activa no se muestran S-01 ni S-02 | Obra en ejecución |
+
+Con los datos actuales, Limoncito, el Puente y Ticabán muestran S-06: la última foto cargada es de jul. 2026, abr. 2026
+y sep. 2025. Puede ser que la cámara ya no envíe o que falte volver a correr el ETL; el texto de la alerta lo aclara.
 
 ## Auditores (Administración → Auditores)
 Crear (nombre, correo, contraseña inicial, frecuencia del reporte y proyectos), **Editar** (nombre, correo de acceso y
@@ -173,8 +239,10 @@ ni las alertas**. Es la base para entrenar y probar el modelo de IA.
     python backend/etl_imagenes.py listar       # solo el catálogo (≈20 s, no descarga)
     python backend/etl_imagenes.py descargar --historico --limite 50   # también la etapa anterior; pocas para probar
     python backend/etl_imagenes.py estado
+    python backend/etl_imagenes.py encuadre --proyecto P-001   # cambios de encuadre de la cámara (después de curar)
 
-- **Carpeta de Limoncito (P-001)** en `config.ETL["carpetas"]`. Estructura y nombres:
+- **Carpeta de Drive de cada obra**: Administración → Proyectos → Editar → "Imágenes desde Google Drive" (ahí también
+  la rotación, la nitidez mínima, la ventana de días y los períodos excluidos). Estructura y nombres (Limoncito, P-001):
   - `<día>/IMG_CAM_01_AAAAMMDD_HHMMSS.jpg`: cámara fija, desde el 17/04/2026 (origen `camara`). Llegan **de cabeza**.
   - `imagenes_tratadas/<día>/`: etapa anterior, sep. 2025 – abr. 2026 (origen `historico`), con nombres
     `AAAAMMDD-HHMMSS.jpg` o `IMG_HH-MM-SS.jpg` (la fecha sale de la carpeta). Incluye fotos de instalación y prueba.
@@ -193,8 +261,18 @@ ni las alertas**. Es la base para entrenar y probar el modelo de IA.
   ya viene derecha). Tras cambiar un umbral: `curar --rehacer`.
 - **Hojas de contacto** (`hojas`): `data/etl/P-001/hojas/<día>.jpg` con todas las fotos del día (verde apta, amarillo
   con aviso, rojo no apta + motivo) e `index.html` para recorrerlas.
+- **Cambios de encuadre** (`encuadre`, `src/etl/encuadre.py`, método del colab "PROERI_cambio_camara_v2" sin OpenCV):
+  por día, las 2 fotos de día más cercanas al mediodía (también las empañadas: igual muestran el encuadre); un
+  descriptor de bordes por foto; disimilitud entre los 7 días con fotos antes y los 7 después; y, en cada cambio,
+  correlación de fase para estimar cuántos píxeles se movió la imagen. Resultado: tablas `etl_encuadre_dias` y
+  `etl_encuadre_cambios` (estado "Por revisar", se conserva al repetir), `data/etl/<id>/encuadre/serie_diaria.csv`,
+  `cambios.csv` y un panel antes/después por cambio (`cambio_<fecha>.jpg`). Umbrales en `config.ENCUADRE`, calibrados con
+  las tres obras reales. Un cambio aparece cuando ya hay 8 días con fotos después de él. Indica qué revisar, no
+  prueba el movimiento. Base de la alerta S-03 (ítem ALE-03 del backlog).
 - Lo que muestran los datos de Limoncito: 22/09–28/10/2025 fotos quemadas; nov. 2025–11/02/2026 lente empañado;
-  desde el 11/02/2026 imagen nítida con **otro encuadre** (la cámara se movió).
+  desde el 11/02/2026 imagen nítida con **otro encuadre** (la cámara se movió). El paso `encuadre` encontró además un
+  **movimiento entre el 06 y el 07/11/2025** (la imagen se corrió ~90 px a la izquierda: se ve en la grúa), no
+  documentado antes. Puente (P-004) y Ticabán (P-005): sin cambios en el período descargado.
 - Los originales se guardan **sin modificar**. Todo se puede repetir: solo baja y procesa lo nuevo.
 
 ## Datos reales en el panel (P-001 Escuela Limoncito)
@@ -209,7 +287,7 @@ a la aplicación lo real (`src/etl/publicar.py`):
   esos datos (A-01 a A-04, C-01, C-02). El sitio público muestra "Avance general: en medición".
 - Los sintéticos de P-001 quedan respaldados en `data/obras/_sintetico/P-001/`; `data/obras/P-001/origen.json` marca
   la obra como real y `make_data.py` ya no la sobrescribe. P-004 (Puente María Aguilar) y P-005 (Liceo Ticabán) también
-  son reales (solo su último mes con datos, `config.ETL["ventana_dias"]`). P-002 sigue siendo de ejemplo.
+  son reales (solo su último mes con datos: "Ventana de días" del proyecto). P-002 sigue siendo de ejemplo.
 - Para volver a los sintéticos: borrar `origen.json`, `diario.csv` y `camara/` de P-001, restaurar desde `_sintetico/`
   y ejecutar `DELETE FROM imagenes WHERE fuente='etl'`.
 
@@ -291,10 +369,13 @@ La frecuencia se define por persona: **No recibir · Diario · Resumen semanal �
 | Semanal | Día configurable (por defecto, lunes) | 7 días anteriores |
 | Quincenal | Dos días configurables (por defecto, 1 y 16) | Desde el envío quincenal anterior hasta el día previo |
 
-**Contenido del PDF**: portada con indicadores y resumen ejecutivo de todos los proyectos, lista de "requiere
-atención" y, por proyecto: ficha (institución, contratista, SICOP, monto, plazo, cámara, coordenadas), indicadores,
-gráfico de avance previsto vs. observado, resumen de la IA, alertas, clima del período (registro consolidado),
-observaciones, aportes ciudadanos y última imagen de la cámara. El botón "Reporte PDF" de cada proyecto usa el mismo formato.
+**Contenido del PDF**: portada con indicadores (incluye **cámaras con alertas**) y resumen ejecutivo de todos los
+proyectos (con una columna **Cámara** con los códigos S-xx), lista de "requiere atención" (incluye las cámaras caídas o
+con alertas) y, por proyecto: ficha (institución, contratista, SICOP, monto, plazo, cámara, coordenadas), indicadores,
+gráfico de avance previsto vs. observado, resumen de la IA, alertas, **salud de la cámara** (última foto, cobertura,
+fotos y días sin fotos del período, alertas S-xx y cambios de encuadre), clima del período (registro consolidado),
+observaciones, aportes ciudadanos y última imagen de la cámara. El correo repite los indicadores de la portada
+(también "cámaras con alertas") y la lista de "requiere atención". El botón "Reporte PDF" de cada proyecto usa el mismo formato.
 
 **Calendario y plantilla configurables** (Administración → Reportes → "Calendario de envío y plantilla del reporte"):
 día del resumen semanal, los dos días del resumen quincenal (1 a 28), **hora de envío**, institución, unidad, color principal, logo
@@ -360,6 +441,19 @@ Salida en `data/tareas.log`. En el Programador de tareas: Crear tarea básica �
 ## Despliegue web
 - Docker / Cloud Run: `gcloud run deploy diara --source . --set-env-vars ADMIN_PASS=...,SECRET_KEY=...`
 - Correo: variables SMTP_* (ver «Reportes automáticos por correo»).
+
+## Pruebas automáticas
+    pip install -r requirements-dev.txt     (una vez: instala pytest)
+    python -m pytest                        (desde esta carpeta; tarda unos segundos)
+
+- Están en `tests/` y **nunca tocan los datos reales**: `tests/conftest.py` define `DIARA_DATA_DIR` con una carpeta
+  temporal (base nueva con los proyectos de `data/proyectos.csv` y los usuarios de ejemplo) y la borra al terminar.
+- Cubren: alertas A-01..A-04 e indicadores (`test_alertas.py`), alertas C-01..C-05 del cruce con la empresa
+  ejecutora (`test_alertas_contratista.py`), reglas de curación del ETL (`test_curacion.py`), permisos por rol y lo
+  que publica el sitio público (`test_permisos.py`) y la API de cámaras (`test_api_camaras.py`).
+- Los umbrales se leen de `config.py`: cambiar un umbral no rompe las pruebas, pero cambiar una **regla** sí.
+- Al agregar una alerta o una regla nueva, agregar su prueba en el mismo cambio.
+- GitHub las corre solo en cada push y pull request (`.github/workflows/pruebas.yml`, pestaña "Actions").
 
 ## Pendientes conocidos
 - Falta límite de intentos de login y recuperación de contraseña por correo.

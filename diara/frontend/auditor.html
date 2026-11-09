@@ -39,6 +39,7 @@
 .tp .entrar b{color:var(--pr)}
 .aviso{display:flex;gap:10px;align-items:baseline;padding:8px 0;border-top:1px solid var(--bd)}.aviso:first-of-type{border-top:0}
 .aviso a{margin-left:auto;white-space:nowrap}
+.cam{font-size:12.5px;color:var(--mu)}.cam.mal{color:var(--al)}  /* línea de salud de la cámara en las tarjetas */
 </style>
 </head>
 <body>
@@ -71,7 +72,17 @@ function url(p, seccion) { return "/proyecto?p=" + encodeURIComponent(p.id) + (s
 function barra(t, v, color) { return '<div class="barra"><span>' + t + '</span><span class="t"><i style="width:' + Math.min(100, v || 0) + "%;background:" + color + '"></i></span><b>' + (v == null ? "—" : v + "%") + "</b></div>" }  /* v null: avance sin medición */
 /* Puntaje para ordenar las tarjetas: pesan más las alertas altas, luego las alertas, aportes pendientes y el atraso
    (brecha negativa suma). Las obras sin datos van al final. */
-function urgencia(p) { return p.datos ? p.alertas_altas * 100 + p.alertas * 10 + p.aportes_pendientes - (p.brecha || 0) : -1000 }
+function urgencia(p) { return (p.datos ? p.alertas_altas * 100 + p.alertas * 10 + p.aportes_pendientes - (p.brecha || 0) : -1000) + ((p.camara || {}).alertas_altas || 0) * 50 }
+/* Línea "📷" de las tarjetas: salud de la cámara (src/salud_camara.py vía tablero.tarjeta). Sus alertas S-xx van aparte
+   de las de la obra: dicen que la evidencia se está perdiendo o cambió, no que la obra esté atrasada. */
+function lineaCamara(p) {
+  var c = p.camara || {};
+  if (!c.ultima_foto) return c.alertas ? '<div class="cam mal">📷 Sin fotos recibidas de la cámara</div>' : "";
+  var txt = "📷 Última foto " + fmtFecha(c.ultima_foto) + (c.dias_sin_fotos ? " (hace " + c.dias_sin_fotos + " d)" : "") +
+    (c.cobertura_7d != null ? " · cobertura 7 d " + c.cobertura_7d + "%" : "");
+  return '<div class="cam' + (c.alertas_altas ? " mal" : "") + '">' + txt + (c.alertas ? ' · <b>' + c.alertas + " alerta(s) de cámara</b>" : "") + "</div>";
+}
+
 
 /* P: lista de tarjetas de /api/mis-proyectos. Las obras sin datos (p.datos=false) no traen avance ni alertas. */
 function pintar(P) {
@@ -94,6 +105,14 @@ function pintar(P) {
     if (p.alertas_altas) avisos.push(["🔴", "<b>" + esc(p.nombre) + "</b>: " + p.alertas_altas + " alerta(s) de gravedad alta" + (p.brecha == null ? "" : " · brecha " + p.brecha + " pts"), url(p, "resumen"), "Revisar alertas"]);
     if (p.obs_abiertas) avisos.push(["📝", "<b>" + esc(p.nombre) + "</b>: " + p.obs_abiertas + " observación(es) sin resolver", url(p, "observaciones"), "Ver observaciones"]);
   });
+  /* Alertas sin atender más del plazo (src/ciclo_alertas.py): de la obra y de la cámara */
+  P.forEach(function (p) { if (p.alertas_vencidas) avisos.push(["⏰", "<b>" + esc(p.nombre) + "</b>: " + p.alertas_vencidas + " alerta(s) sin atender hace más del plazo de atención", url(p, p.datos ? "resumen" : "camara"), "Gestionar alertas"]) });
+  /* Cámara: una alerta alta (S-06) es "cámara caída o retirada"; las demás, revisar en la sección Salud de la cámara */
+  P.forEach(function (p) {
+    var c = p.camara || {};
+    if (c.alertas_altas) avisos.push(["📷", "<b>" + esc(p.nombre) + "</b>: " + (c.ultima_foto ? "la cámara no envía fotos desde hace " + c.dias_sin_fotos + " día(s)" : "no se ha recibido ninguna foto de la cámara"), url(p, "camara"), "Ver cámara"]);
+    else if (c.alertas) avisos.push(["📷", "<b>" + esc(p.nombre) + "</b>: " + c.alertas + " alerta(s) de la cámara (" + c.codigos.join(", ") + ")", url(p, "camara"), "Ver cámara"]);
+  });
   P.forEach(function (p) { if (p.aportes_pendientes) avisos.push(["🏘️", "<b>" + esc(p.nombre) + "</b>: " + p.aportes_pendientes + " aporte(s) ciudadano(s) por revisar", url(p, "aportes"), "Revisar aportes"]) });
   $("#atencion").innerHTML = "<h3>Requiere su atención</h3>" + (avisos.length ? avisos.map(function (a) {
     return '<div class="aviso"><span>' + a[0] + "</span><span>" + a[1] + '</span><a class="link" href="' + a[2] + '">' + a[3] + " →</a></div>"
@@ -107,8 +126,8 @@ function pintar(P) {
       '<div class="mini"><div class="' + (p.brecha != null && p.brecha <= -10 ? "mal" : "") + '"><b>' + (p.brecha == null ? "—" : p.brecha) + "</b><span>brecha</span></div>" +
       '<div class="' + (p.alertas_altas ? "mal" : "") + '"><b>' + p.alertas + "</b><span>alertas</span></div>" +
       "<div><b>" + p.obs_abiertas + "</b><span>obs. abiertas</span></div><div><b>" + p.aportes_pendientes + "</b><span>aportes</span></div></div>" +
-      '<div class="mu">Actualizado ' + fmtFecha(p.ultima_actualizacion) + "</div>"
-      : '<p class="mu" style="margin:0">' + (p.imagen ? "La cámara ya envía imágenes; el análisis de avance de la IA aún no está disponible." : "Esta obra aún no tiene cámara instalada ni datos de avance.") + "</p>";
+      '<div class="mu">Actualizado ' + fmtFecha(p.ultima_actualizacion) + "</div>" + lineaCamara(p)
+      : '<p class="mu" style="margin:0">' + (p.imagen ? "La cámara ya envía imágenes; el análisis de avance de la IA aún no está disponible." : "Esta obra aún no tiene cámara instalada ni datos de avance.") + "</p>" + lineaCamara(p);
     return '<a class="card tp' + (p.alertas_altas ? " atencion" : "") + '" href="' + url(p) + '"><div class="foto">' + foto + badge + "</div>" +
       '<div class="cuerpo"><div><h2>' + esc(p.nombre) + '</h2><div class="mu">' + esc(p.ubicacion) + " · " + esc(p.institucion) + "</div></div>" + cuerpo +
       '<div class="entrar"><span class="mu">' + esc(p.id) + "</span><b>Entrar al proyecto →</b></div></div></a>"

@@ -1,6 +1,7 @@
 # Entorno de Python y cachés
 .venv/
 __pycache__/
+.pytest_cache/
 *.pyc
 
 # Secretos: claves de clima, SMTP y SECRET_KEY (la plantilla sin valores es .env.ejemplo)
@@ -9,6 +10,8 @@ __pycache__/
 # Base de datos (usuarios con claves cifradas, observaciones, clima): se crea sola al arrancar
 data/diara.db
 data/*.db-journal
+# respaldos de la base antes de una migración (contienen datos y claves cifradas)
+data/*.respaldo*
 
 # Datos generados o descargados: se regeneran con los scripts (ver README)
 data/uploads/*

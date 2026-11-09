@@ -32,8 +32,10 @@ from src import store, etl
 COLUMNAS = ["fecha", "hay_registro", "fotos", "personas_prom", "personas_max", "maquinaria", "maquinaria_operando",
             "horas_sitio", "horas_efectivas", "tiempo_muerto_h", "lluvia_mm", "apto_trabajo", "temp_max", "temp_min", "humedad",
             "confianza_min", "avance_previsto", "avance_observado",  # mismas columnas que espera src/metrics.py
-            "fotos_total", "calidad", "fuente_clima"]  # extra de los datos reales: fotos tomadas (aptas o no), motivo si ninguna
+            "fotos_total", "calidad", "fuente_clima",  # extra de los datos reales: fotos tomadas (aptas o no), motivo si ninguna
                                                        # fue apta y origen del clima (src/clima.reemplazar_en_diario lo respeta)
+            "cambio_mediana"]  # índice de cambio de la jornada (mediana del % de píxeles que cambian entre fotos seguidas,
+                               # src/ia/actividad.py); vacío si no hay fotos seguidas. Lo usa la alerta A-05 (src/alerts.py)
 INTERVALO_H = 21 / 60  # cada cuánto toma foto la cámara de Limoncito (~21 min)
 
 def _respaldar(pid):
@@ -74,7 +76,7 @@ def _fotos(pid):
 def _diario(pid):
     """Paso 3: una fila por día, del primer al último día con fotos DESCARGADAS (incluye días sin fotos: hay_registro 0)."""
     j0, j1 = IA["jornada"]
-    fotos = store._df("""SELECT e.fecha, e.hora, a.personas FROM etl_imagenes e LEFT JOIN ia_actividad a ON a.drive_id=e.drive_id
+    fotos = store._df("""SELECT e.fecha, e.hora, a.personas, a.cambio_pct FROM etl_imagenes e LEFT JOIN ia_actividad a ON a.drive_id=e.drive_id
         WHERE e.project_id=? AND e.apta_ia=1""", (pid,))
     # Todas las fotos descargadas (aptas o no): un día con fotos pero ninguna apta NO es "sin cámara", es "fotos no aptas"
     todas = store._df("""SELECT fecha, apta_ia, motivo_ia FROM etl_imagenes WHERE project_id=? AND ruta_local IS NOT NULL
@@ -82,7 +84,7 @@ def _diario(pid):
     todas["bloqueo"] = todas.motivo_ia.fillna("").str.split("; ").str[0].where(todas.apta_ia == 0)  # primer motivo de bloqueo
     clima = store._df("""SELECT fecha, round(sum(lluvia_mm),1) lluvia_mm, round(max(temp),1) temp_max, round(min(temp),1) temp_min,
         round(avg(humedad)) humedad FROM etl_clima_horas WHERE project_id=? GROUP BY fecha""", (pid,)).set_index("fecha")
-    # Período DESCARGADO (no todo el catálogo): en obras con ventana (config.ETL["ventana_dias"]) solo el último mes
+    # Período DESCARGADO (no todo el catálogo): en obras con ventana ("Ventana de días" del proyecto) solo el último mes
     rango = store._filas("""SELECT min(fecha) a, max(fecha) b FROM etl_imagenes WHERE project_id=? AND origen<>'otros'
                             AND ruta_local IS NOT NULL""", (pid,))[0]
     filas = []
@@ -102,7 +104,9 @@ def _diario(pid):
         calidad = None
         if len(t_dia) and not len(dia):  # hubo fotos, ninguna apta: el motivo más frecuente (lente empañado, sobreexpuesta...)
             calidad = t_dia.bloqueo.dropna().mode().iat[0] if t_dia.bloqueo.notna().any() else "no aptas"
+        cambio = jor.cambio_pct.dropna()   # misma medida que cambio_mediana de actividad_diaria.csv (fotos aptas en jornada)
         filas.append(dict(fecha=f, hay_registro=int(len(dia) > 0), fotos=len(dia), fotos_total=len(t_dia), calidad=calidad,
+                          cambio_mediana=round(float(cambio.median()), 2) if len(cambio) else None,
                           personas_prom=round(jor.personas.mean(), 1) if len(jor) else 0.0, personas_max=int(jor.personas.max()) if len(jor) else 0,
                           maquinaria="", maquinaria_operando=None, horas_sitio=sitio, horas_efectivas=efectivas,
                           tiempo_muerto_h=None, lluvia_mm=lluvia if lluvia is not None else 0.0,
