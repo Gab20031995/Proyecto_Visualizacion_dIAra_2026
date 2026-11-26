@@ -8,6 +8,8 @@ Fecha: 2026-11-09 · Insumos revisados:
 
 El backlog priorizado que sale de esta propuesta está en [`backlog_mejoras.md`](backlog_mejoras.md) (y en
 [`backlog_mejoras.csv`](backlog_mejoras.csv) para importarlo a GitHub Projects, Jira o Trello).
+Los criterios de visualización (gráficos, color, interacción) están en
+[`guia_visualizacion_cairo.md`](guia_visualizacion_cairo.md) y en los ítems VIZ-xx del backlog.
 
 ---
 

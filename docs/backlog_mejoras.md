@@ -8,11 +8,11 @@ Sale de [`propuesta_mejoras_cgr.md`](propuesta_mejoras_cgr.md). También está e
 
 ## Resumen por fase
 
-- **Fase 1 (Must, 24 ítems):** CAM-01, CAM-02, CAM-03, CAM-05, CAM-06, PIP-01, PIP-02, ALE-01, ALE-02, ALE-03, EDA-01, EDA-02, IA-01, IA-02, IA-03, IA-05, ADM-01, ADM-03, CIU-04, PUB-01, INT-01, GOB-02, GOB-01, TEC-02
-- **Fase 2 (Should, 19 ítems):** CAM-04, PIP-03, PIP-04, IA-04, IA-06, IA-07, ADM-02, ADM-04, CON-01, CON-02, CIU-01, CIU-02, UX-01, INT-02, SEG-01, KPI-01, TEC-01, TEC-03, TEC-04
-- **Fase 3 (Could, 8 ítems):** ALE-04, EDA-03, IA-08, CIU-03, PUB-02, INT-03, INT-04, KPI-02
+- **Fase 1 (Must, 29 ítems):** CAM-01, CAM-02, CAM-03, CAM-05, CAM-06, PIP-01, PIP-02, ALE-01, ALE-02, ALE-03, EDA-01, EDA-02, IA-01, IA-02, IA-03, IA-05, ADM-01, ADM-03, CIU-04, PUB-01, INT-01, GOB-02, GOB-01, TEC-02, VIZ-01, VIZ-02, VIZ-04, VIZ-07, VIZ-11
+- **Fase 2 (Should, 24 ítems):** CAM-04, PIP-03, PIP-04, IA-04, IA-06, IA-07, ADM-02, ADM-04, CON-01, CON-02, CIU-01, CIU-02, UX-01, INT-02, SEG-01, KPI-01, TEC-01, TEC-03, TEC-04, VIZ-03, VIZ-05, VIZ-06, VIZ-08, VIZ-10
+- **Fase 3 (Could, 10 ítems):** ALE-04, EDA-03, IA-08, CIU-03, PUB-02, INT-03, INT-04, KPI-02, VIZ-09, VIZ-12
 
-Orden sugerido dentro de la Fase 1: primero **CAM-06, CAM-01, CAM-03, ADM-01, ADM-03, TEC-02** (bases), después **EDA-01, EDA-02, PIP-01, PIP-02** (datos automáticos), luego **ALE-01, ALE-02, ALE-03, CAM-05** (alertas útiles) y en paralelo **IA-01, IA-02, IA-03, IA-05, GOB-01** (costo de la IA) e **INT-01, GOB-02, CIU-04, PUB-01**.
+Orden sugerido dentro de la Fase 1: primero **CAM-06, CAM-01, CAM-03, ADM-01, ADM-03, TEC-02** (bases), después **EDA-01, EDA-02, PIP-01, PIP-02** (datos automáticos), luego **ALE-01, ALE-02, ALE-03, CAM-05** (alertas útiles) y en paralelo **IA-01, IA-02, IA-03, IA-05, GOB-01** (costo de la IA) e **INT-01, GOB-02, CIU-04, PUB-01**. Los VIZ Must (VIZ-01, 02, 04, 07, 11) son cortos y se pueden hacer en cualquier momento.
 
 ## CAM · Cámaras y captura estandarizada
 
@@ -545,5 +545,118 @@ Orden sugerido dentro de la Fase 1: primero **CAM-06, CAM-01, CAM-03, ADM-01, AD
 *Historia:* Como CGR quiero evitar la obligación de AGPL en producción.
 
 *Criterios de aceptación:* Decisión documentada: licencia comercial o un detector con licencia permisiva, evaluado con IA-03.
+
+</details>
+
+## VIZ · Visualización (guía Cairo)
+
+| ID | Título | Prioridad | Tamaño | Depende de | Origen |
+|---|---|---|---|---|---|
+| VIZ-01 | Eje de tiempo real y huecos visibles | Must | M | — | Cairo cap. 6, colab PROERI v2, guía §2 #1 y #9 |
+| VIZ-02 | Nulos nunca como cero | Must | S | — | Guía §2 #2 |
+| VIZ-04 | Semántica de color única | Must | S | — | Cairo caps. 6 y 8, guía §2 #4, #8 y #11 |
+| VIZ-07 | Ayudas visibles sin pasar el mouse | Must | S | — | Cairo cap. 9 (visibilidad), guía §2 #6 y #7 |
+| VIZ-11 | Lista de control de gráficos en las revisiones de código | Must | S | — | Guía §3 |
+| VIZ-03 | Clima en dos paneles | Should | S | VIZ-05 | Cairo cap. 6, guía §2 #3 |
+| VIZ-05 | Módulo común de gráficos | Should | M | VIZ-01, VIZ-02 | Cairo cap. 9 (consistencia), guía §2 #10 |
+| VIZ-06 | Graficar la diferencia reportado − observado | Should | S | VIZ-05 | Cairo cap. 6, guía §2 #5 |
+| VIZ-08 | Franja 'qué requiere atención' en el panel | Should | M | — | Cairo cap. 9, guía §2 #12 |
+| VIZ-10 | Sitio público según la rueda de visualización | Should | M | PUB-01 | Cairo cap. 3, guía §2 #13 |
+| VIZ-09 | Small multiples de todas las obras | Could | M | VIZ-05, SEG-01 | Cairo caps. 3–4 (densidad), guía §2 #14 |
+| VIZ-12 | Retroalimentación en las acciones | Could | S | — | Cairo cap. 9 (retroalimentación), guía §2 #16 |
+
+<details><summary><b>VIZ-01</b> · Eje de tiempo real y huecos visibles</summary>
+
+*Historia:* Como auditor quiero que los gráficos no inventen continuidad en los días sin datos.
+
+*Criterios de aceptación:* Eje X por fecha calendario en graficoAvance y graficoEmpresa; línea cortada en los huecos; días sin datos sombreados; marcas semanales y de mes.
+
+</details>
+
+<details><summary><b>VIZ-02</b> · Nulos nunca como cero</summary>
+
+*Historia:* Como auditor quiero que 'sin dato' no se dibuje como 0 %.
+
+*Criterios de aceptación:* graficoEmpresa salta los valores nulos; prueba con una serie mixta; se aplica a todo gráfico nuevo.
+
+</details>
+
+<details><summary><b>VIZ-04</b> · Semántica de color única</summary>
+
+*Historia:* Como usuario quiero que el rojo signifique siempre alerta.
+
+*Criterios de aceptación:* Tokens de color únicos para la web y el PDF; el rojo solo para las alertas; las series con una paleta neutra y un acento; verificado con un simulador de daltonismo.
+
+</details>
+
+<details><summary><b>VIZ-07</b> · Ayudas visibles sin pasar el mouse</summary>
+
+*Historia:* Como auditor en el celular quiero leer qué significa cada indicador.
+
+*Criterios de aceptación:* kpi() muestra el texto auxiliar debajo del valor; los títulos de los gráficos dicen la conclusión; funciona en el celular.
+
+</details>
+
+<details><summary><b>VIZ-11</b> · Lista de control de gráficos en las revisiones de código</summary>
+
+*Historia:* Como equipo quiero revisar cada gráfico nuevo con criterios comunes.
+
+*Criterios de aceptación:* Lista de control de la guía §3 en la plantilla de PR; se aplica a los gráficos existentes una vez.
+
+</details>
+
+<details><summary><b>VIZ-03</b> · Clima en dos paneles</summary>
+
+*Historia:* Como auditor quiero leer la lluvia y la temperatura sin un doble eje engañoso.
+
+*Criterios de aceptación:* Dos paneles apilados con el mismo eje X; línea del umbral de 5 mm; también en el PDF.
+
+</details>
+
+<details><summary><b>VIZ-05</b> · Módulo común de gráficos</summary>
+
+*Historia:* Como equipo quiero un solo código para los ejes, las fechas, los huecos y las leyendas.
+
+*Criterios de aceptación:* assets/js/graficos.js usado por proyecto, admin y contratista; se eliminan las copias; misma apariencia en todas las páginas.
+
+</details>
+
+<details><summary><b>VIZ-06</b> · Graficar la diferencia reportado − observado</summary>
+
+*Historia:* Como auditor quiero ver directamente cuánto reporta de más la empresa.
+
+*Criterios de aceptación:* Mini gráfico de la diferencia con una banda de tolerancia (umbral C-01); se marcan los días fuera de banda.
+
+</details>
+
+<details><summary><b>VIZ-08</b> · Franja 'qué requiere atención' en el panel</summary>
+
+*Historia:* Como auditor quiero ver primero lo importante y después los detalles.
+
+*Criterios de aceptación:* Resumen de 1–3 frases arriba del panel; las secciones de detalle se pueden plegar; sigue el mantra de Shneiderman.
+
+</details>
+
+<details><summary><b>VIZ-10</b> · Sitio público según la rueda de visualización</summary>
+
+*Historia:* Como ciudadano quiero entender en lenguaje llano qué pasa en mi obra.
+
+*Criterios de aceptación:* Foto o timelapse + una frase llana + el estado; mapa de las obras; sin alertas sensibles; prueba con 3–5 personas ajenas al proyecto.
+
+</details>
+
+<details><summary><b>VIZ-09</b> · Small multiples de todas las obras</summary>
+
+*Historia:* Como CGR quiero comparar la actividad de muchas obras a la vez.
+
+*Criterios de aceptación:* Cuadrícula de mini series por obra con la misma escala, ordenada por el índice de riesgo; escala para 50+ obras.
+
+</details>
+
+<details><summary><b>VIZ-12</b> · Retroalimentación en las acciones</summary>
+
+*Historia:* Como usuario quiero saber que mi acción se está procesando.
+
+*Criterios de aceptación:* Botones con el estado 'procesando…' y desactivados mientras esperan la API; los errores se muestran en contexto.
 
 </details>
