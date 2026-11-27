@@ -82,6 +82,11 @@ también `$env:SECRET_KEY`; si no, las sesiones se cierran cada vez que se reini
       diara.db              Base SQLite (se crea sola): proyectos, imagenes, usuarios, asignaciones, observaciones,
                             aportes, suscripciones, proyectos_historial (cambios de estado) y las 6 tablas de clima
 
+## Fuentes de datos de gobierno
+Dónde están los datos oficiales de contratación de las obras (SICOP, E-PROERI, E-Reporting, BCIE, DIE), estrategia de
+acceso y mejoras propuestas (campos y alertas de contratación): [`docs/fuentes_datos_gobierno.md`](docs/fuentes_datos_gobierno.md).
+Datos reales de referencia de las obras piloto: `data/referencia/contrataciones_obras.csv` (no se cargan en la base).
+
 ## Proyectos (Administración → Proyectos)
 Los proyectos viven en la tabla `proyectos` de la base. `data/proyectos.csv` solo se usa una vez, para cargar la
 tabla la primera vez que arranca el servidor. Desde **+ Nuevo proyecto** o **✏️ Editar** se registran:
